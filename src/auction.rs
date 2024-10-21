@@ -1,0 +1,202 @@
+use rand::{rngs::StdRng, SeedableRng};
+
+use crate::collateral::collateral_requirement;
+use crate::commitment::{commit_bid, random_salt, Commitment, SALT_BYTES};
+use crate::distribution::ValueDistribution;
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum ParticipantId {
+    Auctioneer,
+    Real(usize),
+    False(usize),
+}
+
+impl ParticipantId {
+    fn tie_rank(&self) -> u64 {
+        match self {
+            ParticipantId::Auctioneer => 0,
+            ParticipantId::Real(i) => 1 + (*i as u64),
+            ParticipantId::False(j) => 50_000 + (*j as u64),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct CommitmentRecord {
+    id: ParticipantId,
+    commitment: Commitment,
+    bid: f64,
+    salt: [u8; SALT_BYTES],
+    posted_collateral: f64,
+    will_reveal: bool,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct FalseBid {
+    pub bid: f64,
+    pub reveal: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct AuctionOutcome {
+    pub reserve: f64,
+    pub collateral: f64,
+    pub winner: Option<ParticipantId>,
+    pub winning_bid: f64,
+    pub payment: f64,
+    pub transferred_collateral: f64,
+    pub forfeited_to_auctioneer: f64,
+    pub valid_bids: Vec<(ParticipantId, f64)>,
+}
+
+pub struct PublicBroadcastDRA<D: ValueDistribution> {
+    distribution: D,
+    alpha: f64,
+}
+
+impl<D: ValueDistribution> PublicBroadcastDRA<D> {
+    pub fn new(distribution: D, alpha: f64) -> Self {
+        assert!(alpha > 0.0, "alpha must be positive");
+        Self { distribution, alpha }
+    }
+
+    pub fn collateral(&self, n_buyers: usize) -> f64 {
+        collateral_requirement(n_buyers, &self.distribution, self.alpha)
+    }
+
+    /// Run the DRA with public broadcast. `valuations` are the honest buyers'
+    /// values, and `false_bids` represents auctioneer-inserted bids.
+    pub fn run_with_false_bids(
+        &self,
+        valuations: &[f64],
+        false_bids: &[FalseBid],
+        rng_seed: Option<u64>,
+    ) -> AuctionOutcome {
+        let n = valuations.len();
+        let collateral = self.collateral(n);
+        let reserve = self.distribution.reserve_price();
+        let mut rng = rng_seed
+            .map(StdRng::seed_from_u64)
+            .unwrap_or_else(|| StdRng::from_entropy());
+
+        // Commitment phase.
+        let mut commitments: Vec<CommitmentRecord> = Vec::new();
+        for (i, &v) in valuations.iter().enumerate() {
+            let salt = random_salt(&mut rng);
+            commitments.push(CommitmentRecord {
+                id: ParticipantId::Real(i),
+                commitment: commit_bid(v, &salt),
+                bid: v,
+                salt,
+                posted_collateral: collateral,
+                will_reveal: true,
+            });
+        }
+        for (j, fb) in false_bids.iter().enumerate() {
+            let salt = random_salt(&mut rng);
+            commitments.push(CommitmentRecord {
+                id: ParticipantId::False(j),
+                commitment: commit_bid(fb.bid, &salt),
+                bid: fb.bid,
+                salt,
+                posted_collateral: collateral,
+                will_reveal: fb.reveal,
+            });
+        }
+
+        // Revelation phase: only those who reveal enter the valid set.
+        let mut valid_bids: Vec<(ParticipantId, f64)> = Vec::new();
+        let mut invalid_collateral = 0.0;
+        for c in commitments.iter() {
+            if c.will_reveal && c.commitment.verify(c.bid, &c.salt) {
+                valid_bids.push((c.id.clone(), c.bid));
+            } else {
+                invalid_collateral += c.posted_collateral;
+            }
+        }
+
+        // Resolution phase.
+        let mut highest: Option<(ParticipantId, f64)> = None;
+        let mut second: Option<f64> = None;
+        for (id, bid) in valid_bids.iter() {
+            match highest {
+                None => highest = Some((id.clone(), *bid)),
+                Some((ref hid, hbid)) => {
+                    if *bid > hbid
+                        || (*bid == hbid && id.tie_rank() < hid.tie_rank())
+                    {
+                        second = Some(hbid);
+                        highest = Some((id.clone(), *bid));
+                    } else if *bid == hbid {
+                        if second.map(|s| *bid > s).unwrap_or(true) {
+                            second = Some(*bid);
+                        }
+                    } else if second.map(|s| *bid > s).unwrap_or(true) && *bid < hbid {
+                        second = Some(*bid);
+                    }
+                }
+            }
+        }
+
+        let (winner, winning_bid, payment, transferred_collateral, forfeited_to_auctioneer) =
+            match highest {
+                None => (None, 0.0, 0.0, 0.0, invalid_collateral),
+                Some((id, bid)) => {
+                    if bid > reserve {
+                        let second_bid = second.unwrap_or(0.0);
+                        let pay = reserve.max(second_bid);
+                        (Some(id), bid, pay, invalid_collateral, 0.0)
+                    } else {
+                        (None, bid, 0.0, 0.0, invalid_collateral)
+                    }
+                }
+            };
+
+        AuctionOutcome {
+            reserve,
+            collateral,
+            winner,
+            winning_bid,
+            payment,
+            transferred_collateral,
+            forfeited_to_auctioneer,
+            valid_bids,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::distribution::{Exponential, Uniform, ValueDistribution};
+
+    #[test]
+    fn honest_bidders_pay_second_price_above_reserve() {
+        let dist = Uniform::new(0.0, 20.0);
+        let dra = PublicBroadcastDRA::new(dist.clone(), 1.0);
+        let outcome = dra.run_with_false_bids(&[15.0, 9.0, 11.0], &[], Some(7));
+        assert_eq!(outcome.winner, Some(ParticipantId::Real(0)));
+        assert_eq!(outcome.payment, dist.reserve_price().max(11.0));
+    }
+
+    #[test]
+    fn no_sale_when_highest_below_reserve() {
+        let dist = Exponential::new(1.0);
+        let dra = PublicBroadcastDRA::new(dist, 1.0);
+        let outcome = dra.run_with_false_bids(&[0.2, 0.5], &[], Some(42));
+        assert!(outcome.winner.is_none());
+        assert_eq!(outcome.payment, 0.0);
+    }
+
+    #[test]
+    fn withheld_false_bid_forfeits_collateral() {
+        let dist = Exponential::new(0.5);
+        let dra = PublicBroadcastDRA::new(dist, 1.0);
+        let false_bid = FalseBid {
+            bid: 100.0,
+            reveal: false,
+        };
+        let outcome = dra.run_with_false_bids(&[5.0], &[false_bid], Some(1));
+        assert!(outcome.forfeited_to_auctioneer > 0.0 || outcome.transferred_collateral > 0.0);
+    }
+}

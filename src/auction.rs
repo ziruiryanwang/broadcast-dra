@@ -199,4 +199,26 @@ mod tests {
         let outcome = dra.run_with_false_bids(&[5.0], &[false_bid], Some(1));
         assert!(outcome.forfeited_to_auctioneer > 0.0 || outcome.transferred_collateral > 0.0);
     }
+
+    #[test]
+    fn tie_breaks_lexicographically() {
+        let dist = Uniform::new(0.0, 20.0);
+        let dra = PublicBroadcastDRA::new(dist.clone(), 1.0);
+        let outcome = dra.run_with_false_bids(&[12.0, 12.0], &[], Some(3));
+        assert_eq!(outcome.winner, Some(ParticipantId::Real(0)));
+        assert!((outcome.payment - 12.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn winner_collects_forfeited_collateral_when_sale_occurs() {
+        let dist = Uniform::new(0.0, 20.0);
+        let dra = PublicBroadcastDRA::new(dist, 1.0);
+        let false_bid = FalseBid {
+            bid: 25.0,
+            reveal: false,
+        };
+        let outcome = dra.run_with_false_bids(&[18.0], &[false_bid], Some(99));
+        assert!(outcome.winner.is_some());
+        assert!(outcome.transferred_collateral > 0.0);
+    }
 }

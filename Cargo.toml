@@ -5,4 +5,9 @@ edition = "2024"
 
 [dependencies]
 rand = "0.8"
+rand_distr = "0.4"
 sha2 = "0.10"
+statrs = "0.16"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+clap = { version = "4.5", features = ["derive"] }

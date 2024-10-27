@@ -1,7 +1,7 @@
 use rand::{rngs::StdRng, SeedableRng};
 
 use crate::collateral::collateral_requirement;
-use crate::commitment::{commit_bid, random_salt, Commitment, SALT_BYTES};
+use crate::commitment::{commit_bid, Commitment, Opening};
 use crate::distribution::ValueDistribution;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -25,8 +25,7 @@ impl ParticipantId {
 struct CommitmentRecord {
     id: ParticipantId,
     commitment: Commitment,
-    bid: f64,
-    salt: [u8; SALT_BYTES],
+    opening: Opening,
     posted_collateral: f64,
     will_reveal: bool,
 }
@@ -82,23 +81,21 @@ impl<D: ValueDistribution> PublicBroadcastDRA<D> {
         // Commitment phase.
         let mut commitments: Vec<CommitmentRecord> = Vec::new();
         for (i, &v) in valuations.iter().enumerate() {
-            let salt = random_salt(&mut rng);
+            let (commitment, opening) = commit_bid(v, &mut rng);
             commitments.push(CommitmentRecord {
                 id: ParticipantId::Real(i),
-                commitment: commit_bid(v, &salt),
-                bid: v,
-                salt,
+                commitment,
+                opening,
                 posted_collateral: collateral,
                 will_reveal: true,
             });
         }
         for (j, fb) in false_bids.iter().enumerate() {
-            let salt = random_salt(&mut rng);
+            let (commitment, opening) = commit_bid(fb.bid, &mut rng);
             commitments.push(CommitmentRecord {
                 id: ParticipantId::False(j),
-                commitment: commit_bid(fb.bid, &salt),
-                bid: fb.bid,
-                salt,
+                commitment,
+                opening,
                 posted_collateral: collateral,
                 will_reveal: fb.reveal,
             });
@@ -108,8 +105,8 @@ impl<D: ValueDistribution> PublicBroadcastDRA<D> {
         let mut valid_bids: Vec<(ParticipantId, f64)> = Vec::new();
         let mut invalid_collateral = 0.0;
         for c in commitments.iter() {
-            if c.will_reveal && c.commitment.verify(c.bid, &c.salt) {
-                valid_bids.push((c.id.clone(), c.bid));
+            if c.will_reveal && c.commitment.verify(&c.opening) {
+                valid_bids.push((c.id.clone(), c.opening.bid));
             } else {
                 invalid_collateral += c.posted_collateral;
             }

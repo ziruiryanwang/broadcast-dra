@@ -8,3 +8,4 @@ pub use auction::{AuctionOutcome, FalseBid, PublicBroadcastDRA};
 pub use collateral::collateral_requirement;
 pub use commitment::{commit_bid, Commitment};
 pub use distribution::{Exponential, LogNormal, Pareto, Uniform, ValueDistribution};
+pub use simulation::{simulate_false_bid_impact, RevenueStats};

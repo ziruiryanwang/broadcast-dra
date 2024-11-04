@@ -1,7 +1,7 @@
 use rand::{rngs::StdRng, SeedableRng};
 
 use crate::collateral::collateral_requirement;
-use crate::commitment::{commit_bid, Commitment, Opening};
+use crate::commitment::{Commitment, CommitmentScheme, NonMalleableShaCommitment, Opening};
 use crate::distribution::ValueDistribution;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -71,6 +71,17 @@ impl<D: ValueDistribution> PublicBroadcastDRA<D> {
         false_bids: &[FalseBid],
         rng_seed: Option<u64>,
     ) -> AuctionOutcome {
+        let mut scheme = NonMalleableShaCommitment::default();
+        self.run_with_false_bids_using_scheme(valuations, false_bids, rng_seed, &mut scheme)
+    }
+
+    pub fn run_with_false_bids_using_scheme<S: CommitmentScheme>(
+        &self,
+        valuations: &[f64],
+        false_bids: &[FalseBid],
+        rng_seed: Option<u64>,
+        scheme: &mut S,
+    ) -> AuctionOutcome {
         let n = valuations.len();
         let collateral = self.collateral(n);
         let reserve = self.distribution.reserve_price();
@@ -81,7 +92,7 @@ impl<D: ValueDistribution> PublicBroadcastDRA<D> {
         // Commitment phase.
         let mut commitments: Vec<CommitmentRecord> = Vec::new();
         for (i, &v) in valuations.iter().enumerate() {
-            let (commitment, opening) = commit_bid(v, &mut rng);
+            let (commitment, opening) = scheme.commit(v, &mut rng);
             commitments.push(CommitmentRecord {
                 id: ParticipantId::Real(i),
                 commitment,
@@ -91,7 +102,7 @@ impl<D: ValueDistribution> PublicBroadcastDRA<D> {
             });
         }
         for (j, fb) in false_bids.iter().enumerate() {
-            let (commitment, opening) = commit_bid(fb.bid, &mut rng);
+            let (commitment, opening) = scheme.commit(fb.bid, &mut rng);
             commitments.push(CommitmentRecord {
                 id: ParticipantId::False(j),
                 commitment,
@@ -105,7 +116,7 @@ impl<D: ValueDistribution> PublicBroadcastDRA<D> {
         let mut valid_bids: Vec<(ParticipantId, f64)> = Vec::new();
         let mut invalid_collateral = 0.0;
         for c in commitments.iter() {
-            if c.will_reveal && c.commitment.verify(&c.opening) {
+            if c.will_reveal && scheme.verify(&c.commitment, &c.opening) {
                 valid_bids.push((c.id.clone(), c.opening.bid));
             } else {
                 invalid_collateral += c.posted_collateral;

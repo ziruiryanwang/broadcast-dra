@@ -20,10 +20,12 @@ Input JSON shape:
   "valuations": [3, 5, 7],
   "false_bids": [{ "bid": 20, "reveal": false }],
   "alpha": 1.0,
-  "rng_seed": 42
+  "rng_seed": 42,
+  "commitment_backend": "pedersen"
 }
 ```
 Supported distributions: `exponential {lambda}`, `uniform {low, high}`, `pareto {scale, shape}`, `lognormal {mu, sigma}`.
+Commitment backends: `sha` (default) or `pedersen`.
 
 Output JSON shape:
 ```json

@@ -2,6 +2,7 @@ use rand::rngs::StdRng;
 use rand::SeedableRng;
 
 use crate::auction::{AuctionOutcome, PublicBroadcastDRA};
+use crate::commitment::{NonMalleableShaCommitment, PedersenRistrettoCommitment};
 use crate::distribution::ValueDistribution;
 use crate::FalseBid;
 
@@ -26,6 +27,12 @@ pub struct SimulationResult {
     pub baseline_revenue: f64,
     pub deviated_revenue: f64,
     pub allocation_change_rate: f64,
+}
+
+#[derive(Clone, Debug)]
+pub enum Backend {
+    Sha(NonMalleableShaCommitment),
+    Pedersen(PedersenRistrettoCommitment),
 }
 
 fn auctioneer_revenue(outcome: &AuctionOutcome) -> f64 {
@@ -71,6 +78,26 @@ pub fn simulate_deviation<D: ValueDistribution + Clone>(
     deviation: DeviationModel,
     seed: u64,
 ) -> SimulationResult {
+    simulate_deviation_with_scheme(
+        dist,
+        alpha,
+        buyers,
+        trials,
+        deviation,
+        seed,
+        Backend::Sha(NonMalleableShaCommitment),
+    )
+}
+
+pub fn simulate_deviation_with_scheme<D: ValueDistribution + Clone>(
+    dist: D,
+    alpha: f64,
+    buyers: usize,
+    trials: usize,
+    deviation: DeviationModel,
+    seed: u64,
+    backend: Backend,
+) -> SimulationResult {
     let dra = PublicBroadcastDRA::new(dist.clone(), alpha);
     let mut rng = StdRng::seed_from_u64(seed);
 
@@ -86,9 +113,27 @@ pub fn simulate_deviation<D: ValueDistribution + Clone>(
             .iter()
             .cloned()
             .fold(0.0_f64, f64::max);
-        let base_outcome = dra.run_with_false_bids(&vals, &[], None);
+        let base_outcome = match &backend {
+            Backend::Sha(s) => {
+                let mut s = s.clone();
+                dra.run_with_false_bids_using_scheme(&vals, &[], None, &mut s)
+            }
+            Backend::Pedersen(p) => {
+                let mut p = p.clone();
+                dra.run_with_false_bids_using_scheme(&vals, &[], None, &mut p)
+            }
+        };
         let false_bids = false_bids_from_model(&deviation, top_real);
-        let dev_outcome = dra.run_with_false_bids(&vals, &false_bids, None);
+        let dev_outcome = match &backend {
+            Backend::Sha(s) => {
+                let mut s = s.clone();
+                dra.run_with_false_bids_using_scheme(&vals, &false_bids, None, &mut s)
+            }
+            Backend::Pedersen(p) => {
+                let mut p = p.clone();
+                dra.run_with_false_bids_using_scheme(&vals, &false_bids, None, &mut p)
+            }
+        };
 
         baseline_total += auctioneer_revenue(&base_outcome);
         deviated_total += auctioneer_revenue(&dev_outcome);

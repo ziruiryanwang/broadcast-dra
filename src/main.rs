@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use broadcast_dra::{
     FalseBid, LogNormal, Pareto, PublicBroadcastDRA, Uniform, ValueDistribution, Exponential,
+    NonMalleableShaCommitment, PedersenRistrettoCommitment,
 };
 
 #[derive(Parser, Debug)]
@@ -42,6 +43,19 @@ struct AuctionRequest {
     false_bids: Vec<FalseBidSpec>,
     alpha: Option<f64>,
     rng_seed: Option<u64>,
+    #[serde(default = "default_backend")]
+    commitment_backend: CommitmentBackendSpec,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum CommitmentBackendSpec {
+    Sha,
+    Pedersen,
+}
+
+fn default_backend() -> CommitmentBackendSpec {
+    CommitmentBackendSpec::Sha
 }
 
 #[derive(Debug, Serialize)]
@@ -54,6 +68,11 @@ struct AuctionResponse {
     transferred_collateral: f64,
     forfeited_to_auctioneer: f64,
     valid_bids: Vec<(String, f64)>,
+}
+
+enum Backend {
+    Sha(NonMalleableShaCommitment),
+    Pedersen(PedersenRistrettoCommitment),
 }
 
 fn main() -> io::Result<()> {
@@ -85,6 +104,10 @@ fn run_with_dist<D: ValueDistribution + 'static>(dist: D, req: AuctionRequest) -
         .or_else(|| dist.strong_regular_alpha())
         .unwrap_or(1.0);
     let dra = PublicBroadcastDRA::new(dist, alpha);
+    let mut backend = match req.commitment_backend {
+        CommitmentBackendSpec::Sha => Backend::Sha(NonMalleableShaCommitment),
+        CommitmentBackendSpec::Pedersen => Backend::Pedersen(PedersenRistrettoCommitment),
+    };
     let fbs: Vec<FalseBid> = req
         .false_bids
         .iter()
@@ -93,7 +116,10 @@ fn run_with_dist<D: ValueDistribution + 'static>(dist: D, req: AuctionRequest) -
             reveal: fb.reveal,
         })
         .collect();
-    let outcome = dra.run_with_false_bids(&req.valuations, &fbs, req.rng_seed);
+    let outcome = match &mut backend {
+        Backend::Sha(s) => dra.run_with_false_bids_using_scheme(&req.valuations, &fbs, req.rng_seed, s),
+        Backend::Pedersen(p) => dra.run_with_false_bids_using_scheme(&req.valuations, &fbs, req.rng_seed, p),
+    };
 
     let resp = AuctionResponse {
         reserve: outcome.reserve,
@@ -127,6 +153,7 @@ mod tests {
             false_bids: vec![],
             alpha: None,
             rng_seed: Some(7),
+            commitment_backend: CommitmentBackendSpec::Sha,
         };
         run_with_dist(Uniform::new(0.0, 10.0), req).expect("cli run");
     }

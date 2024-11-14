@@ -11,5 +11,6 @@ pub use commitment::{
 };
 pub use distribution::{Exponential, LogNormal, Pareto, Uniform, ValueDistribution};
 pub use simulation::{
-    simulate_deviation, simulate_false_bid_impact, DeviationModel, RevenueStats, SimulationResult,
+    simulate_deviation, simulate_deviation_with_scheme, simulate_false_bid_impact, Backend,
+    DeviationModel, RevenueStats, SimulationResult,
 };

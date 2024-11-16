@@ -156,4 +156,13 @@ mod tests {
         let (c, open) = scheme.commit(13.0, &mut rng);
         assert!(scheme.verify(&c, &open));
     }
+
+    #[test]
+    fn pedersen_rejects_tampered_opening() {
+        let mut rng = rand::thread_rng();
+        let scheme = PedersenRistrettoCommitment;
+        let (c, mut open) = scheme.commit(9.0, &mut rng);
+        open.salt[0] ^= 0xFF;
+        assert!(!scheme.verify(&c, &open));
+    }
 }

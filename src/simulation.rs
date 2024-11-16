@@ -154,6 +154,7 @@ pub fn simulate_deviation_with_scheme<D: ValueDistribution + Clone>(
 mod tests {
     use super::*;
     use crate::distribution::Exponential;
+    use crate::commitment::PedersenRistrettoCommitment;
 
     #[test]
     fn simulation_runs_and_returns_finite_values() {
@@ -178,5 +179,20 @@ mod tests {
             456,
         );
         assert!(dev.allocation_change_rate >= 0.0);
+    }
+
+    #[test]
+    fn simulation_runs_with_pedersen_backend() {
+        let dist = Exponential::new(1.0);
+        let dev = simulate_deviation_with_scheme(
+            dist,
+            1.0,
+            2,
+            50,
+            DeviationModel::Fixed(FalseBid { bid: 3.0, reveal: true }),
+            999,
+            Backend::Pedersen(PedersenRistrettoCommitment),
+        );
+        assert!(dev.deviated_revenue.is_finite());
     }
 }

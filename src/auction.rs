@@ -229,4 +229,20 @@ mod tests {
         assert!(outcome.winner.is_some());
         assert!(outcome.transferred_collateral > 0.0);
     }
+
+    #[test]
+    fn pedersen_backend_matches_sha_outcome() {
+        use crate::commitment::PedersenRistrettoCommitment;
+        use crate::commitment::NonMalleableShaCommitment;
+        let dist = Uniform::new(0.0, 20.0);
+        let dra = PublicBroadcastDRA::new(dist, 1.0);
+        let vals = [12.0, 7.0, 15.0];
+        let fbs = [FalseBid { bid: 21.0, reveal: false }];
+        let mut sha = NonMalleableShaCommitment;
+        let mut ped = PedersenRistrettoCommitment;
+        let o1 = dra.run_with_false_bids_using_scheme(&vals, &fbs, Some(5), &mut sha);
+        let o2 = dra.run_with_false_bids_using_scheme(&vals, &fbs, Some(5), &mut ped);
+        assert_eq!(o1.winner, o2.winner);
+        assert!((o1.payment - o2.payment).abs() < 1e-9);
+    }
 }

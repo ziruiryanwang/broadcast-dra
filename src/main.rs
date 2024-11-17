@@ -2,12 +2,13 @@ use std::fs::File;
 use std::io::{self, Read};
 use std::path::PathBuf;
 
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use serde::{Deserialize, Serialize};
 
 use broadcast_dra::{
     FalseBid, LogNormal, Pareto, PublicBroadcastDRA, Uniform, ValueDistribution, Exponential,
     NonMalleableShaCommitment, PedersenRistrettoCommitment,
+    simulate_deviation_with_scheme, DeviationModel, SimulationResult,
 };
 
 #[derive(Parser, Debug)]
@@ -17,6 +18,18 @@ struct CliArgs {
     /// Path to a JSON input file. If omitted, reads from stdin.
     #[arg(short, long)]
     input: Option<PathBuf>,
+
+    /// Override the commitment backend (overrides JSON).
+    #[arg(long, value_enum)]
+    backend: Option<CommitmentBackendSpec>,
+
+    /// If set, run a simulation instead of a single auction.
+    #[arg(long)]
+    simulate: bool,
+
+    /// Number of trials for simulation mode.
+    #[arg(long, default_value_t = 500)]
+    trials: usize,
 }
 
 #[derive(Debug, Deserialize)]
@@ -47,7 +60,7 @@ struct AuctionRequest {
     commitment_backend: CommitmentBackendSpec,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, ValueEnum)]
 #[serde(rename_all = "lowercase")]
 enum CommitmentBackendSpec {
     Sha,
@@ -70,10 +83,7 @@ struct AuctionResponse {
     valid_bids: Vec<(String, f64)>,
 }
 
-enum Backend {
-    Sha(NonMalleableShaCommitment),
-    Pedersen(PedersenRistrettoCommitment),
-}
+type Backend = broadcast_dra::Backend;
 
 fn main() -> io::Result<()> {
     let args = CliArgs::parse();
@@ -87,14 +97,21 @@ fn main() -> io::Result<()> {
             io::stdin().read_to_string(&mut input)?;
         }
     }
-    let req: AuctionRequest =
+    let mut req: AuctionRequest =
         serde_json::from_str(&input).expect("Invalid JSON input for auction");
+    if let Some(b) = args.backend {
+        req.commitment_backend = b;
+    }
 
-    match req.distribution {
-        DistributionSpec::Exponential { lambda } => run_with_dist(Exponential::new(lambda), req),
-        DistributionSpec::Uniform { low, high } => run_with_dist(Uniform::new(low, high), req),
-        DistributionSpec::Pareto { scale, shape } => run_with_dist(Pareto::new(scale, shape), req),
-        DistributionSpec::Lognormal { mu, sigma } => run_with_dist(LogNormal::new(mu, sigma), req),
+    if args.simulate {
+        run_simulation(req, args.trials)
+    } else {
+        match req.distribution {
+            DistributionSpec::Exponential { lambda } => run_with_dist(Exponential::new(lambda), req),
+            DistributionSpec::Uniform { low, high } => run_with_dist(Uniform::new(low, high), req),
+            DistributionSpec::Pareto { scale, shape } => run_with_dist(Pareto::new(scale, shape), req),
+            DistributionSpec::Lognormal { mu, sigma } => run_with_dist(LogNormal::new(mu, sigma), req),
+        }
     }
 }
 
@@ -141,6 +158,82 @@ fn run_with_dist<D: ValueDistribution + 'static>(dist: D, req: AuctionRequest) -
     Ok(())
 }
 
+fn run_simulation(req: AuctionRequest, trials: usize) -> io::Result<()> {
+    let buyers = req.valuations.len();
+    if buyers == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "valuations must be non-empty to infer buyer count for simulation",
+        ));
+    }
+    let alpha = req.alpha.unwrap_or(1.0);
+    let backend = match req.commitment_backend {
+        CommitmentBackendSpec::Sha => Backend::Sha(NonMalleableShaCommitment),
+        CommitmentBackendSpec::Pedersen => Backend::Pedersen(PedersenRistrettoCommitment),
+    };
+    let deviation = if req.false_bids.len() > 1 {
+        DeviationModel::Multiple(
+            req.false_bids
+                .iter()
+                .map(|fb| FalseBid {
+                    bid: fb.bid,
+                    reveal: fb.reveal,
+                })
+                .collect(),
+        )
+    } else if let Some(fb) = req.false_bids.first() {
+        DeviationModel::Fixed(FalseBid {
+            bid: fb.bid,
+            reveal: fb.reveal,
+        })
+    } else {
+        DeviationModel::Fixed(FalseBid { bid: 0.0, reveal: true })
+    };
+
+    let sims: SimulationResult = match req.distribution {
+        DistributionSpec::Exponential { lambda } => simulate_deviation_with_scheme(
+            Exponential::new(lambda),
+            alpha,
+            buyers,
+            trials,
+            deviation,
+            req.rng_seed.unwrap_or(1),
+            backend,
+        ),
+        DistributionSpec::Uniform { low, high } => simulate_deviation_with_scheme(
+            Uniform::new(low, high),
+            alpha,
+            buyers,
+            trials,
+            deviation,
+            req.rng_seed.unwrap_or(1),
+            backend,
+        ),
+        DistributionSpec::Pareto { scale, shape } => simulate_deviation_with_scheme(
+            Pareto::new(scale, shape),
+            alpha,
+            buyers,
+            trials,
+            deviation,
+            req.rng_seed.unwrap_or(1),
+            backend,
+        ),
+        DistributionSpec::Lognormal { mu, sigma } => simulate_deviation_with_scheme(
+            LogNormal::new(mu, sigma),
+            alpha,
+            buyers,
+            trials,
+            deviation,
+            req.rng_seed.unwrap_or(1),
+            backend,
+        ),
+    };
+
+    serde_json::to_writer_pretty(io::stdout(), &sims)?;
+    println!();
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -156,5 +249,18 @@ mod tests {
             commitment_backend: CommitmentBackendSpec::Sha,
         };
         run_with_dist(Uniform::new(0.0, 10.0), req).expect("cli run");
+    }
+
+    #[test]
+    fn run_simulation_executes() {
+        let req = AuctionRequest {
+            distribution: DistributionSpec::Uniform { low: 0.0, high: 10.0 },
+            valuations: vec![0.0, 0.0, 0.0],
+            false_bids: vec![FalseBidSpec { bid: 4.0, reveal: true }],
+            alpha: Some(1.0),
+            rng_seed: Some(3),
+            commitment_backend: CommitmentBackendSpec::Pedersen,
+        };
+        run_simulation(req, 10).expect("simulation run");
     }
 }

@@ -1,5 +1,6 @@
 use rand::rngs::StdRng;
 use rand::SeedableRng;
+use serde::Serialize;
 
 use crate::auction::{AuctionOutcome, PublicBroadcastDRA};
 use crate::commitment::{NonMalleableShaCommitment, PedersenRistrettoCommitment};
@@ -22,7 +23,7 @@ pub enum DeviationModel {
     },
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 pub struct SimulationResult {
     pub baseline_revenue: f64,
     pub deviated_revenue: f64,
@@ -62,7 +63,14 @@ pub fn simulate_false_bid_impact<D: ValueDistribution + Clone>(
     false_bid: FalseBid,
     seed: u64,
 ) -> RevenueStats {
-    let result = simulate_deviation(dist, alpha, buyers, trials, DeviationModel::Fixed(false_bid), seed);
+    let result = simulate_deviation(
+        dist,
+        alpha,
+        buyers,
+        trials,
+        DeviationModel::Fixed(false_bid),
+        seed,
+    );
     RevenueStats {
         baseline: result.baseline_revenue,
         deviated: result.deviated_revenue,
@@ -109,10 +117,7 @@ pub fn simulate_deviation_with_scheme<D: ValueDistribution + Clone>(
         for _ in 0..buyers {
             vals.push(dist.sample(&mut rng));
         }
-        let top_real = vals
-            .iter()
-            .cloned()
-            .fold(0.0_f64, f64::max);
+        let top_real = vals.iter().cloned().fold(0.0_f64, f64::max);
         let base_outcome = match &backend {
             Backend::Sha(s) => {
                 let mut s = s.clone();
@@ -153,8 +158,8 @@ pub fn simulate_deviation_with_scheme<D: ValueDistribution + Clone>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::distribution::Exponential;
     use crate::commitment::PedersenRistrettoCommitment;
+    use crate::distribution::Exponential;
 
     #[test]
     fn simulation_runs_and_returns_finite_values() {
@@ -175,7 +180,10 @@ mod tests {
             1.0,
             3,
             200,
-            DeviationModel::ThresholdReveal { bid: 15.0, reveal_if_top_at_least: 8.0 },
+            DeviationModel::ThresholdReveal {
+                bid: 15.0,
+                reveal_if_top_at_least: 8.0,
+            },
             456,
         );
         assert!(dev.allocation_change_rate >= 0.0);

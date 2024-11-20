@@ -41,6 +41,10 @@ Output JSON shape:
 }
 ```
 
+Flags:
+- `--backend {sha|pedersen}` overrides the JSON backend.
+- `--simulate --trials N` runs Monte Carlo using the provided distribution, alpha, backend, buyer count inferred from `valuations.len()`, and deviation given by `false_bids`, outputting simulation summary JSON.
+
 ## Running
 ```
 cargo run --bin demo

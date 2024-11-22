@@ -16,6 +16,10 @@ pub struct Opening {
     pub mask: [u8; SALT_BYTES],
 }
 
+fn encode_bid(bid: f64) -> [u8; 8] {
+    bid.to_le_bytes()
+}
+
 impl Commitment {
     pub fn verify_with<S: CommitmentScheme>(&self, opening: &Opening, scheme: &S) -> bool {
         scheme.verify(self, opening)
@@ -62,7 +66,7 @@ impl CommitmentScheme for PedersenRistrettoCommitment {
         let mask = random_bytes(rng);
         let r = hash_to_scalar(&salt);
         let mut buf = Vec::with_capacity(8 + SALT_BYTES * 2);
-        buf.extend_from_slice(&bid.to_le_bytes());
+        buf.extend_from_slice(&encode_bid(bid));
         buf.extend_from_slice(&salt);
         buf.extend_from_slice(&mask);
         let m = hash_to_scalar(&buf);
@@ -77,7 +81,7 @@ impl CommitmentScheme for PedersenRistrettoCommitment {
     fn verify(&self, commitment: &Commitment, opening: &Opening) -> bool {
         let r = hash_to_scalar(&opening.salt);
         let mut buf = Vec::with_capacity(8 + SALT_BYTES * 2);
-        buf.extend_from_slice(&opening.bid.to_le_bytes());
+        buf.extend_from_slice(&encode_bid(opening.bid));
         buf.extend_from_slice(&opening.salt);
         buf.extend_from_slice(&opening.mask);
         let m = hash_to_scalar(&buf);
@@ -92,7 +96,7 @@ impl CommitmentScheme for PedersenRistrettoCommitment {
 pub fn commit_with_opening(bid: f64, salt: &[u8; SALT_BYTES], mask: &[u8; SALT_BYTES]) -> Commitment {
     let mut hasher = Sha256::new();
     hasher.update(b"DRA-BID");
-    hasher.update(&bid.to_le_bytes());
+    hasher.update(&encode_bid(bid));
     hasher.update(salt);
     hasher.update(mask);
     let digest = hasher.finalize();

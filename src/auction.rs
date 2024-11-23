@@ -75,6 +75,16 @@ impl<D: ValueDistribution> PublicBroadcastDRA<D> {
         self.run_with_false_bids_using_scheme(valuations, false_bids, rng_seed, &mut scheme)
     }
 
+    pub fn run_with_false_bids_with_transcript(
+        &self,
+        valuations: &[f64],
+        false_bids: &[FalseBid],
+        rng_seed: Option<u64>,
+    ) -> (AuctionOutcome, Transcript) {
+        let mut scheme = NonMalleableShaCommitment::default();
+        self.run_with_false_bids_using_scheme_with_transcript(valuations, false_bids, rng_seed, &mut scheme)
+    }
+
     pub fn run_with_false_bids_using_scheme<S: CommitmentScheme>(
         &self,
         valuations: &[f64],
@@ -82,6 +92,17 @@ impl<D: ValueDistribution> PublicBroadcastDRA<D> {
         rng_seed: Option<u64>,
         scheme: &mut S,
     ) -> AuctionOutcome {
+        let (outcome, _) = self.run_with_false_bids_using_scheme_with_transcript(valuations, false_bids, rng_seed, scheme);
+        outcome
+    }
+
+    pub fn run_with_false_bids_using_scheme_with_transcript<S: CommitmentScheme>(
+        &self,
+        valuations: &[f64],
+        false_bids: &[FalseBid],
+        rng_seed: Option<u64>,
+        scheme: &mut S,
+    ) -> (AuctionOutcome, Transcript) {
         let n = valuations.len();
         let collateral = self.collateral(n);
         let reserve = self.distribution.reserve_price();
@@ -91,6 +112,11 @@ impl<D: ValueDistribution> PublicBroadcastDRA<D> {
 
         // Commitment phase.
         let mut commitments: Vec<CommitmentRecord> = Vec::new();
+        let mut transcript = Transcript {
+            commitments: Vec::new(),
+            reveals: Vec::new(),
+            outcome: None,
+        };
         for (i, &v) in valuations.iter().enumerate() {
             let (commitment, opening) = scheme.commit(v, &mut rng);
             commitments.push(CommitmentRecord {
@@ -99,6 +125,10 @@ impl<D: ValueDistribution> PublicBroadcastDRA<D> {
                 opening,
                 posted_collateral: collateral,
                 will_reveal: true,
+            });
+            transcript.commitments.push(CommitmentEvent {
+                participant: ParticipantId::Real(i),
+                commitment: commitments.last().unwrap().commitment.clone(),
             });
         }
         for (j, fb) in false_bids.iter().enumerate() {
@@ -110,6 +140,10 @@ impl<D: ValueDistribution> PublicBroadcastDRA<D> {
                 posted_collateral: collateral,
                 will_reveal: fb.reveal,
             });
+            transcript.commitments.push(CommitmentEvent {
+                participant: ParticipantId::False(j),
+                commitment: commitments.last().unwrap().commitment.clone(),
+            });
         }
 
         // Revelation phase: only those who reveal enter the valid set.
@@ -118,8 +152,16 @@ impl<D: ValueDistribution> PublicBroadcastDRA<D> {
         for c in commitments.iter() {
             if c.will_reveal && scheme.verify(&c.commitment, &c.opening) {
                 valid_bids.push((c.id.clone(), c.opening.bid));
+                transcript.reveals.push(RevealEvent {
+                    participant: c.id.clone(),
+                    revealed: true,
+                });
             } else {
                 invalid_collateral += c.posted_collateral;
+                transcript.reveals.push(RevealEvent {
+                    participant: c.id.clone(),
+                    revealed: false,
+                });
             }
         }
 
@@ -160,7 +202,7 @@ impl<D: ValueDistribution> PublicBroadcastDRA<D> {
                 }
             };
 
-        AuctionOutcome {
+        let outcome = AuctionOutcome {
             reserve,
             collateral,
             winner,
@@ -169,7 +211,9 @@ impl<D: ValueDistribution> PublicBroadcastDRA<D> {
             transferred_collateral,
             forfeited_to_auctioneer,
             valid_bids,
-        }
+        };
+        transcript.outcome = Some(outcome.clone());
+        (outcome, transcript)
     }
 }
 
@@ -245,4 +289,22 @@ mod tests {
         assert_eq!(o1.winner, o2.winner);
         assert!((o1.payment - o2.payment).abs() < 1e-9);
     }
+}
+#[derive(Clone, Debug)]
+pub struct CommitmentEvent {
+    pub participant: ParticipantId,
+    pub commitment: Commitment,
+}
+
+#[derive(Clone, Debug)]
+pub struct RevealEvent {
+    pub participant: ParticipantId,
+    pub revealed: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct Transcript {
+    pub commitments: Vec<CommitmentEvent>,
+    pub reveals: Vec<RevealEvent>,
+    pub outcome: Option<AuctionOutcome>,
 }

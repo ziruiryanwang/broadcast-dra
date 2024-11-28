@@ -59,6 +59,21 @@ impl<D: ValueDistribution> PublicBroadcastDRA<D> {
         Self { distribution, alpha }
     }
 
+    pub fn validate_inputs(&self, buyers: usize) -> Result<(), ValidationError> {
+        if buyers == 0 {
+            return Err(ValidationError::InsufficientBuyers);
+        }
+        if let Some(max_alpha) = self.distribution.strong_regular_alpha() {
+            if self.alpha > max_alpha + f64::EPSILON {
+                return Err(ValidationError::AlphaTooLarge {
+                    requested: self.alpha,
+                    supported: max_alpha,
+                });
+            }
+        }
+        Ok(())
+    }
+
     pub fn collateral(&self, n_buyers: usize) -> f64 {
         collateral_requirement(n_buyers, &self.distribution, self.alpha)
     }
@@ -104,6 +119,7 @@ impl<D: ValueDistribution> PublicBroadcastDRA<D> {
         scheme: &mut S,
     ) -> (AuctionOutcome, Transcript) {
         let n = valuations.len();
+        self.validate_inputs(n).expect("invalid inputs for auction");
         let collateral = self.collateral(n);
         let reserve = self.distribution.reserve_price();
         let mut rng = rng_seed
@@ -289,6 +305,14 @@ mod tests {
         assert_eq!(o1.winner, o2.winner);
         assert!((o1.payment - o2.payment).abs() < 1e-9);
     }
+
+    #[test]
+    #[should_panic]
+    fn validate_inputs_panic_on_zero_buyers() {
+        let dist = Uniform::new(0.0, 10.0);
+        let dra = PublicBroadcastDRA::new(dist, 1.0);
+        let _ = dra.run_with_false_bids(&[], &[], None);
+    }
 }
 #[derive(Clone, Debug)]
 pub struct CommitmentEvent {
@@ -307,4 +331,10 @@ pub struct Transcript {
     pub commitments: Vec<CommitmentEvent>,
     pub reveals: Vec<RevealEvent>,
     pub outcome: Option<AuctionOutcome>,
+}
+
+#[derive(Debug)]
+pub enum ValidationError {
+    InsufficientBuyers,
+    AlphaTooLarge { requested: f64, supported: f64 },
 }

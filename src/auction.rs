@@ -45,6 +45,7 @@ pub struct AuctionOutcome {
     pub payment: f64,
     pub transferred_collateral: f64,
     pub forfeited_to_auctioneer: f64,
+    pub auctioneer_penalty: f64,
     pub valid_bids: Vec<(ParticipantId, f64)>,
 }
 
@@ -165,6 +166,7 @@ impl<D: ValueDistribution> PublicBroadcastDRA<D> {
         // Revelation phase: only those who reveal enter the valid set.
         let mut valid_bids: Vec<(ParticipantId, f64)> = Vec::new();
         let mut invalid_collateral = 0.0;
+        let mut penalty = 0.0;
         for c in commitments.iter() {
             if c.will_reveal && scheme.verify(&c.commitment, &c.opening) {
                 valid_bids.push((c.id.clone(), c.opening.bid));
@@ -173,6 +175,9 @@ impl<D: ValueDistribution> PublicBroadcastDRA<D> {
                     revealed: true,
                 });
             } else {
+                if matches!(c.id, ParticipantId::False(_)) && c.opening.bid > collateral {
+                    penalty += c.opening.bid - collateral;
+                }
                 invalid_collateral += c.posted_collateral;
                 transcript.reveals.push(RevealEvent {
                     participant: c.id.clone(),
@@ -206,14 +211,15 @@ impl<D: ValueDistribution> PublicBroadcastDRA<D> {
 
         let (winner, winning_bid, payment, transferred_collateral, forfeited_to_auctioneer) =
             match highest {
-                None => (None, 0.0, 0.0, 0.0, invalid_collateral),
+                None => (None, 0.0, 0.0, 0.0, invalid_collateral + penalty),
                 Some((id, bid)) => {
                     if bid > reserve {
                         let second_bid = second.unwrap_or(0.0);
                         let pay = reserve.max(second_bid);
-                        (Some(id), bid, pay, invalid_collateral, 0.0)
+                        let transfer = invalid_collateral + penalty;
+                        (Some(id), bid, pay, transfer, 0.0)
                     } else {
-                        (None, bid, 0.0, 0.0, invalid_collateral)
+                        (None, bid, 0.0, 0.0, invalid_collateral + penalty)
                     }
                 }
             };
@@ -226,6 +232,7 @@ impl<D: ValueDistribution> PublicBroadcastDRA<D> {
             payment,
             transferred_collateral,
             forfeited_to_auctioneer,
+            auctioneer_penalty: penalty,
             valid_bids,
         };
         transcript.outcome = Some(outcome.clone());

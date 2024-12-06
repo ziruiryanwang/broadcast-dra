@@ -98,7 +98,7 @@ impl<D: ValueDistribution> PublicBroadcastDRA<D> {
         rng_seed: Option<u64>,
     ) -> (AuctionOutcome, Transcript) {
         let mut scheme = NonMalleableShaCommitment::default();
-        self.run_with_false_bids_using_scheme_with_transcript(valuations, false_bids, rng_seed, &mut scheme)
+        self.run_with_false_bids_using_scheme_with_transcript(valuations, false_bids, None, rng_seed, &mut scheme)
     }
 
     pub fn run_with_false_bids_using_scheme<S: CommitmentScheme>(
@@ -108,15 +108,21 @@ impl<D: ValueDistribution> PublicBroadcastDRA<D> {
         rng_seed: Option<u64>,
         scheme: &mut S,
     ) -> AuctionOutcome {
-        let (outcome, _) =
-            self.run_with_false_bids_using_scheme_with_transcript(valuations, false_bids, rng_seed, scheme);
+        let (outcome, _) = self.run_with_false_bids_using_scheme_with_transcript(
+            valuations,
+            false_bids,
+            None,
+            rng_seed,
+            scheme,
+        );
         outcome
     }
 
-pub fn run_with_false_bids_using_scheme_with_transcript<S: CommitmentScheme>(
+    pub fn run_with_false_bids_using_scheme_with_transcript<S: CommitmentScheme>(
         &self,
         valuations: &[f64],
         false_bids: &[FalseBid],
+        real_reveals: Option<&[bool]>,
         rng_seed: Option<u64>,
         scheme: &mut S,
     ) -> (AuctionOutcome, Transcript) {
@@ -142,7 +148,7 @@ pub fn run_with_false_bids_using_scheme_with_transcript<S: CommitmentScheme>(
                 commitment,
                 opening,
                 posted_collateral: collateral,
-                will_reveal: true,
+                will_reveal: real_reveals.map(|r| r.get(i).copied().unwrap_or(true)).unwrap_or(true),
             });
             transcript.commitments.push(CommitmentEvent {
                 participant: ParticipantId::Real(i),

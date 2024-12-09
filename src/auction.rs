@@ -180,6 +180,7 @@ impl<D: ValueDistribution> PublicBroadcastDRA<D> {
                 transcript.reveals.push(RevealEvent {
                     participant: c.id.clone(),
                     revealed: true,
+                    opening: Some(c.opening.clone()),
                 });
             } else {
                 if matches!(c.id, ParticipantId::False(_)) && c.opening.bid > collateral {
@@ -189,6 +190,7 @@ impl<D: ValueDistribution> PublicBroadcastDRA<D> {
                 transcript.reveals.push(RevealEvent {
                     participant: c.id.clone(),
                     revealed: false,
+                    opening: None,
                 });
             }
         }
@@ -338,6 +340,7 @@ pub struct CommitmentEvent {
 pub struct RevealEvent {
     pub participant: ParticipantId,
     pub revealed: bool,
+    pub opening: Option<Opening>,
 }
 
 #[derive(Clone, Debug)]
@@ -358,7 +361,7 @@ pub enum AuditError {
 /// every reveal references a committed party.
 pub fn audit_transcript<S: CommitmentScheme>(
     transcript: &Transcript,
-    _scheme: &mut S,
+    scheme: &mut S,
 ) -> Result<(), AuditError> {
     let outcome = transcript.outcome.as_ref().ok_or(AuditError::MissingOutcome)?;
     // Build a map from participant to commitment/opening if revealed.
@@ -372,17 +375,20 @@ pub fn audit_transcript<S: CommitmentScheme>(
             .get(&rev.participant)
             .ok_or_else(|| AuditError::RevealWithoutCommit(rev.participant.clone()))?;
         if rev.revealed {
-            // Find the bid/opening in outcome.valid_bids
-            let opening_bid = outcome
+            // Check opening was logged and verifies the commitment.
+            let opening = rev
+                .opening
+                .as_ref()
+                .ok_or_else(|| AuditError::BadOpening(rev.participant.clone()))?;
+            if !scheme.verify(commit, opening) {
+                return Err(AuditError::BadOpening(rev.participant.clone()));
+            }
+            // Ensure allocation/payment used a valid bidder
+            let _ = outcome
                 .valid_bids
                 .iter()
-                .find_map(|(p, b)| if p == &rev.participant { Some(*b) } else { None })
+                .find(|(p, _)| p == &rev.participant)
                 .ok_or_else(|| AuditError::BadOpening(rev.participant.clone()))?;
-            // We cannot reconstruct salts/masks from outcome, so the audit ensures revealed parties appear.
-            // In a real audit, openings would be logged; here we only ensure participant consistency.
-            // Verify that a commitment exists; scheme-level verification is handled during execution.
-            let _ = commit;
-            let _ = opening_bid;
         }
     }
     Ok(())

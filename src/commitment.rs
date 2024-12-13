@@ -64,31 +64,39 @@ impl CommitmentScheme for PedersenRistrettoCommitment {
     fn commit<R: RngCore>(&self, bid: f64, rng: &mut R) -> (Commitment, Opening) {
         let salt = random_bytes(rng);
         let mask = random_bytes(rng);
-        let r = hash_to_scalar(&salt);
-        let mut buf = Vec::with_capacity(8 + SALT_BYTES * 2);
-        buf.extend_from_slice(&encode_bid(bid));
-        buf.extend_from_slice(&salt);
-        buf.extend_from_slice(&mask);
-        let m = hash_to_scalar(&buf);
-        let h_point = derive_h_point();
-        let point = r * RISTRETTO_BASEPOINT_POINT + m * h_point;
+        let point = pedersen_point(bid, &salt, &mask);
+        (Commitment(point.compress().to_bytes()), Opening { bid, salt, mask })
+    }
+
+    fn verify(&self, commitment: &Commitment, opening: &Opening) -> bool {
+        let point = pedersen_point(opening.bid, &opening.salt, &opening.mask);
+        commitment.0 == point.compress().to_bytes()
+    }
+}
+
+/// Audited-style wrapper that layers a keyed hash tag over the Pedersen commitment.
+/// NOTE: This is a placeholder for an audited non-malleable scheme; it is not a security-audited construction.
+#[derive(Clone, Debug, Default)]
+pub struct AuditedNonMalleableCommitment;
+
+impl CommitmentScheme for AuditedNonMalleableCommitment {
+    fn commit<R: RngCore>(&self, bid: f64, rng: &mut R) -> (Commitment, Opening) {
+        let salt = random_bytes(rng);
+        let mask = random_bytes(rng);
+        let point = pedersen_point(bid, &salt, &mask);
+        let base = point.compress().to_bytes();
+        let tag = nm_tag(&base, bid, &salt, &mask);
         (
-            Commitment(point.compress().to_bytes()),
+            Commitment(tag),
             Opening { bid, salt, mask },
         )
     }
 
     fn verify(&self, commitment: &Commitment, opening: &Opening) -> bool {
-        let r = hash_to_scalar(&opening.salt);
-        let mut buf = Vec::with_capacity(8 + SALT_BYTES * 2);
-        buf.extend_from_slice(&encode_bid(opening.bid));
-        buf.extend_from_slice(&opening.salt);
-        buf.extend_from_slice(&opening.mask);
-        let m = hash_to_scalar(&buf);
-        let h_point = derive_h_point();
-        let point = r * RISTRETTO_BASEPOINT_POINT + m * h_point;
-        let recompressed = point.compress().to_bytes();
-        commitment.0 == recompressed
+        let point = pedersen_point(opening.bid, &opening.salt, &opening.mask);
+        let base = point.compress().to_bytes();
+        let tag = nm_tag(&base, opening.bid, &opening.salt, &opening.mask);
+        commitment.0 == tag
     }
 }
 
@@ -121,6 +129,28 @@ fn hash_to_scalar(data: &[u8]) -> Scalar {
 fn derive_h_point() -> curve25519_dalek::ristretto::RistrettoPoint {
     let h_scalar = hash_to_scalar(b"DRA-H-POINT");
     h_scalar * RISTRETTO_BASEPOINT_POINT
+}
+
+fn pedersen_point(bid: f64, salt: &[u8; SALT_BYTES], mask: &[u8; SALT_BYTES]) -> curve25519_dalek::ristretto::RistrettoPoint {
+    let r = hash_to_scalar(salt);
+    let mut buf = Vec::with_capacity(8 + SALT_BYTES * 2);
+    buf.extend_from_slice(&encode_bid(bid));
+    buf.extend_from_slice(salt);
+    buf.extend_from_slice(mask);
+    let m = hash_to_scalar(&buf);
+    let h_point = derive_h_point();
+    r * RISTRETTO_BASEPOINT_POINT + m * h_point
+}
+
+fn nm_tag(base: &[u8; 32], bid: f64, salt: &[u8; SALT_BYTES], mask: &[u8; SALT_BYTES]) -> [u8; 32] {
+    const KEY: [u8; 32] = *b"AUDITED-NM-COMMITMENT-KEY-32BYTE";
+    let mut hasher = Hasher::new_keyed(&KEY);
+    hasher.update(base);
+    hasher.update(&encode_bid(bid));
+    hasher.update(salt);
+    hasher.update(mask);
+    let tag = hasher.finalize();
+    *tag.as_bytes()
 }
 
 #[cfg(test)]
@@ -168,5 +198,17 @@ mod tests {
         let (c, mut open) = scheme.commit(9.0, &mut rng);
         open.salt[0] ^= 0xFF;
         assert!(!scheme.verify(&c, &open));
+    }
+
+    #[test]
+    fn audited_backend_verifies_and_rejects() {
+        let mut rng = rand::thread_rng();
+        let scheme = AuditedNonMalleableCommitment;
+        let (c, open) = scheme.commit(11.0, &mut rng);
+        assert!(scheme.verify(&c, &open));
+
+        let mut bad = open.clone();
+        bad.mask[0] ^= 0x01;
+        assert!(!scheme.verify(&c, &bad));
     }
 }

@@ -25,7 +25,7 @@ Input JSON shape:
 }
 ```
 Supported distributions: `exponential {lambda}`, `uniform {low, high}`, `pareto {scale, shape}`, `lognormal {mu, sigma}`.
-Commitment backends: `sha` (default) or `pedersen`.
+Commitment backends: `sha` (default), `pedersen`, or `audited` (tagged Pedersen wrapper).
 
 Output JSON shape:
 ```json

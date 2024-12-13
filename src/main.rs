@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use broadcast_dra::{
     FalseBid, LogNormal, Pareto, PublicBroadcastDRA, Uniform, ValueDistribution, Exponential,
-    NonMalleableShaCommitment, PedersenRistrettoCommitment,
+    NonMalleableShaCommitment, PedersenRistrettoCommitment, AuditedNonMalleableCommitment,
     simulate_deviation_with_scheme, DeviationModel, SimulationResult,
 };
 
@@ -65,6 +65,7 @@ struct AuctionRequest {
 enum CommitmentBackendSpec {
     Sha,
     Pedersen,
+    Audited,
 }
 
 fn default_backend() -> CommitmentBackendSpec {
@@ -124,6 +125,7 @@ fn run_with_dist<D: ValueDistribution + 'static>(dist: D, req: AuctionRequest) -
     let mut backend = match req.commitment_backend {
         CommitmentBackendSpec::Sha => Backend::Sha(NonMalleableShaCommitment),
         CommitmentBackendSpec::Pedersen => Backend::Pedersen(PedersenRistrettoCommitment),
+        CommitmentBackendSpec::Audited => Backend::Audited(AuditedNonMalleableCommitment),
     };
     let fbs: Vec<FalseBid> = req
         .false_bids
@@ -136,6 +138,7 @@ fn run_with_dist<D: ValueDistribution + 'static>(dist: D, req: AuctionRequest) -
     let outcome = match &mut backend {
         Backend::Sha(s) => dra.run_with_false_bids_using_scheme(&req.valuations, &fbs, req.rng_seed, s),
         Backend::Pedersen(p) => dra.run_with_false_bids_using_scheme(&req.valuations, &fbs, req.rng_seed, p),
+        Backend::Audited(a) => dra.run_with_false_bids_using_scheme(&req.valuations, &fbs, req.rng_seed, a),
     };
 
     let resp = AuctionResponse {
@@ -170,6 +173,7 @@ fn run_simulation(req: AuctionRequest, trials: usize) -> io::Result<()> {
     let backend = match req.commitment_backend {
         CommitmentBackendSpec::Sha => Backend::Sha(NonMalleableShaCommitment),
         CommitmentBackendSpec::Pedersen => Backend::Pedersen(PedersenRistrettoCommitment),
+        CommitmentBackendSpec::Audited => Backend::Audited(AuditedNonMalleableCommitment),
     };
     let deviation = if req.false_bids.len() > 1 {
         DeviationModel::Multiple(

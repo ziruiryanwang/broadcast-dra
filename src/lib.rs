@@ -13,6 +13,7 @@ pub use protocol::{Phase, ProtocolError, ProtocolSession};
 pub use collateral::collateral_requirement;
 pub use commitment::{
     Commitment, CommitmentScheme, NonMalleableShaCommitment, PedersenRistrettoCommitment,
+    AuditedNonMalleableCommitment,
 };
 pub use distribution::{Exponential, LogNormal, Pareto, Uniform, ValueDistribution};
 pub use simulation::{

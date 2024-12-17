@@ -100,6 +100,32 @@ impl CommitmentScheme for AuditedNonMalleableCommitment {
     }
 }
 
+/// Placeholder for an "external" non-malleable scheme. In practice, swap this with a vetted library.
+#[derive(Clone, Debug, Default)]
+pub struct ExternalNonMalleableCommitment;
+
+impl CommitmentScheme for ExternalNonMalleableCommitment {
+    fn commit<R: RngCore>(&self, bid: f64, rng: &mut R) -> (Commitment, Opening) {
+        let salt = random_bytes(rng);
+        let mask = random_bytes(rng);
+        // Use audited NM tag as a stand-in.
+        let point = pedersen_point(bid, &salt, &mask);
+        let base = point.compress().to_bytes();
+        let tag = nm_tag(&base, bid, &salt, &mask);
+        (
+            Commitment(tag),
+            Opening { bid, salt, mask },
+        )
+    }
+
+    fn verify(&self, commitment: &Commitment, opening: &Opening) -> bool {
+        let point = pedersen_point(opening.bid, &opening.salt, &opening.mask);
+        let base = point.compress().to_bytes();
+        let tag = nm_tag(&base, opening.bid, &opening.salt, &opening.mask);
+        commitment.0 == tag
+    }
+}
+
 /// Commit to a bid using domain-separated hashing with independent salts and masks.
 pub fn commit_with_opening(bid: f64, salt: &[u8; SALT_BYTES], mask: &[u8; SALT_BYTES]) -> Commitment {
     let mut hasher = Sha256::new();
@@ -210,5 +236,13 @@ mod tests {
         let mut bad = open.clone();
         bad.mask[0] ^= 0x01;
         assert!(!scheme.verify(&c, &bad));
+    }
+
+    #[test]
+    fn external_placeholder_matches_audited_logic() {
+        let mut rng = rand::thread_rng();
+        let scheme = ExternalNonMalleableCommitment;
+        let (c, open) = scheme.commit(7.0, &mut rng);
+        assert!(scheme.verify(&c, &open));
     }
 }

@@ -3,7 +3,7 @@ use rand::SeedableRng;
 use serde::Serialize;
 
 use crate::auction::{AuctionOutcome, PublicBroadcastDRA};
-use crate::commitment::{NonMalleableShaCommitment, PedersenRistrettoCommitment, AuditedNonMalleableCommitment};
+use crate::commitment::{NonMalleableShaCommitment, PedersenRistrettoCommitment, AuditedNonMalleableCommitment, ExternalNonMalleableCommitment};
 use crate::distribution::ValueDistribution;
 use crate::FalseBid;
 
@@ -35,6 +35,7 @@ pub enum Backend {
     Sha(NonMalleableShaCommitment),
     Pedersen(PedersenRistrettoCommitment),
     Audited(AuditedNonMalleableCommitment),
+    External(ExternalNonMalleableCommitment),
 }
 
 fn auctioneer_revenue(outcome: &AuctionOutcome) -> f64 {
@@ -132,6 +133,10 @@ pub fn simulate_deviation_with_scheme<D: ValueDistribution + Clone>(
                 let mut a = a.clone();
                 dra.run_with_false_bids_using_scheme(&vals, &[], None, &mut a)
             }
+            Backend::External(e) => {
+                let mut e = e.clone();
+                dra.run_with_false_bids_using_scheme(&vals, &[], None, &mut e)
+            }
         };
         let false_bids = false_bids_from_model(&deviation, top_real);
         let dev_outcome = match &backend {
@@ -146,6 +151,10 @@ pub fn simulate_deviation_with_scheme<D: ValueDistribution + Clone>(
             Backend::Audited(a) => {
                 let mut a = a.clone();
                 dra.run_with_false_bids_using_scheme(&vals, &false_bids, None, &mut a)
+            }
+            Backend::External(e) => {
+                let mut e = e.clone();
+                dra.run_with_false_bids_using_scheme(&vals, &false_bids, None, &mut e)
             }
         };
 
@@ -224,6 +233,21 @@ mod tests {
             DeviationModel::Fixed(FalseBid { bid: 3.0, reveal: true }),
             321,
             Backend::Audited(AuditedNonMalleableCommitment),
+        );
+        assert!(dev.deviated_revenue.is_finite());
+    }
+
+    #[test]
+    fn simulation_runs_with_external_backend() {
+        let dist = Exponential::new(1.0);
+        let dev = simulate_deviation_with_scheme(
+            dist,
+            1.0,
+            2,
+            50,
+            DeviationModel::Fixed(FalseBid { bid: 3.0, reveal: true }),
+            555,
+            Backend::External(ExternalNonMalleableCommitment),
         );
         assert!(dev.deviated_revenue.is_finite());
     }

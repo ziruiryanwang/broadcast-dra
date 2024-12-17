@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use broadcast_dra::{
     FalseBid, LogNormal, Pareto, PublicBroadcastDRA, Uniform, ValueDistribution, Exponential,
     NonMalleableShaCommitment, PedersenRistrettoCommitment, AuditedNonMalleableCommitment,
+    ExternalNonMalleableCommitment,
     simulate_deviation_with_scheme, DeviationModel, SimulationResult,
 };
 
@@ -66,6 +67,7 @@ enum CommitmentBackendSpec {
     Sha,
     Pedersen,
     Audited,
+    External,
 }
 
 fn default_backend() -> CommitmentBackendSpec {
@@ -126,6 +128,7 @@ fn run_with_dist<D: ValueDistribution + 'static>(dist: D, req: AuctionRequest) -
         CommitmentBackendSpec::Sha => Backend::Sha(NonMalleableShaCommitment),
         CommitmentBackendSpec::Pedersen => Backend::Pedersen(PedersenRistrettoCommitment),
         CommitmentBackendSpec::Audited => Backend::Audited(AuditedNonMalleableCommitment),
+        CommitmentBackendSpec::External => Backend::External(ExternalNonMalleableCommitment),
     };
     let fbs: Vec<FalseBid> = req
         .false_bids
@@ -139,6 +142,7 @@ fn run_with_dist<D: ValueDistribution + 'static>(dist: D, req: AuctionRequest) -
         Backend::Sha(s) => dra.run_with_false_bids_using_scheme(&req.valuations, &fbs, req.rng_seed, s),
         Backend::Pedersen(p) => dra.run_with_false_bids_using_scheme(&req.valuations, &fbs, req.rng_seed, p),
         Backend::Audited(a) => dra.run_with_false_bids_using_scheme(&req.valuations, &fbs, req.rng_seed, a),
+        Backend::External(e) => dra.run_with_false_bids_using_scheme(&req.valuations, &fbs, req.rng_seed, e),
     };
 
     let resp = AuctionResponse {
@@ -174,6 +178,7 @@ fn run_simulation(req: AuctionRequest, trials: usize) -> io::Result<()> {
         CommitmentBackendSpec::Sha => Backend::Sha(NonMalleableShaCommitment),
         CommitmentBackendSpec::Pedersen => Backend::Pedersen(PedersenRistrettoCommitment),
         CommitmentBackendSpec::Audited => Backend::Audited(AuditedNonMalleableCommitment),
+        CommitmentBackendSpec::External => Backend::External(ExternalNonMalleableCommitment),
     };
     let deviation = if req.false_bids.len() > 1 {
         DeviationModel::Multiple(

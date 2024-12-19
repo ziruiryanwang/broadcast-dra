@@ -1,11 +1,16 @@
-use rand::rngs::StdRng;
+use rand::RngCore;
 use rand::SeedableRng;
+use rand::rngs::StdRng;
 use serde::Serialize;
 
-use crate::auction::{AuctionOutcome, PublicBroadcastDRA};
-use crate::commitment::{NonMalleableShaCommitment, PedersenRistrettoCommitment, AuditedNonMalleableCommitment, ExternalNonMalleableCommitment};
-use crate::distribution::ValueDistribution;
 use crate::FalseBid;
+use crate::auction::{AuctionOutcome, ParticipantId, PhaseTimings, PublicBroadcastDRA};
+use crate::commitment::{
+    AuditedNonMalleableCommitment, BulletproofsCommitment, NonMalleableShaCommitment,
+    PedersenRistrettoCommitment, RealNonMalleableCommitment,
+};
+use crate::distribution::ValueDistribution;
+use crate::protocol::ProtocolSession;
 
 #[derive(Clone, Debug)]
 pub struct RevenueStats {
@@ -30,16 +35,30 @@ pub struct SimulationResult {
     pub allocation_change_rate: f64,
 }
 
+#[derive(Clone, Debug, Serialize)]
+pub struct TimedSimulationReport {
+    pub successful_runs: usize,
+    pub deadline_failures: usize,
+    pub average_revenue: f64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct SafeDeviationStats {
+    pub satisfied: bool,
+    pub max_violation: f64,
+}
+
 #[derive(Clone, Debug)]
 pub enum Backend {
     Sha(NonMalleableShaCommitment),
     Pedersen(PedersenRistrettoCommitment),
     Audited(AuditedNonMalleableCommitment),
-    External(ExternalNonMalleableCommitment),
+    Fischlin(RealNonMalleableCommitment),
+    Bulletproofs(BulletproofsCommitment),
 }
 
 fn auctioneer_revenue(outcome: &AuctionOutcome) -> f64 {
-    outcome.payment + outcome.forfeited_to_auctioneer
+    outcome.payment + outcome.forfeited_to_auctioneer - outcome.auctioneer_penalty
 }
 
 fn false_bids_from_model(model: &DeviationModel, top_real_bid: f64) -> Vec<FalseBid> {
@@ -133,9 +152,13 @@ pub fn simulate_deviation_with_scheme<D: ValueDistribution + Clone>(
                 let mut a = a.clone();
                 dra.run_with_false_bids_using_scheme(&vals, &[], None, &mut a)
             }
-            Backend::External(e) => {
-                let mut e = e.clone();
-                dra.run_with_false_bids_using_scheme(&vals, &[], None, &mut e)
+            Backend::Fischlin(f) => {
+                let mut f = f.clone();
+                dra.run_with_false_bids_using_scheme(&vals, &[], None, &mut f)
+            }
+            Backend::Bulletproofs(b) => {
+                let mut b = b.clone();
+                dra.run_with_false_bids_using_scheme(&vals, &[], None, &mut b)
             }
         };
         let false_bids = false_bids_from_model(&deviation, top_real);
@@ -152,9 +175,13 @@ pub fn simulate_deviation_with_scheme<D: ValueDistribution + Clone>(
                 let mut a = a.clone();
                 dra.run_with_false_bids_using_scheme(&vals, &false_bids, None, &mut a)
             }
-            Backend::External(e) => {
-                let mut e = e.clone();
-                dra.run_with_false_bids_using_scheme(&vals, &false_bids, None, &mut e)
+            Backend::Fischlin(f) => {
+                let mut f = f.clone();
+                dra.run_with_false_bids_using_scheme(&vals, &false_bids, None, &mut f)
+            }
+            Backend::Bulletproofs(b) => {
+                let mut b = b.clone();
+                dra.run_with_false_bids_using_scheme(&vals, &false_bids, None, &mut b)
             }
         };
 
@@ -173,10 +200,157 @@ pub fn simulate_deviation_with_scheme<D: ValueDistribution + Clone>(
     }
 }
 
+/// Drive the full ProtocolSession with explicit time slots and report audit outcomes.
+pub fn simulate_timed_protocol<D: ValueDistribution + Clone>(
+    dist: D,
+    alpha: f64,
+    buyers: usize,
+    trials: usize,
+    deviation: DeviationModel,
+    schedule: PhaseTimings,
+    seed: u64,
+) -> TimedSimulationReport {
+    let mut rng = StdRng::seed_from_u64(seed);
+    let mut successes = 0usize;
+    let mut deadline_failures = 0usize;
+    let mut revenue_sum = 0.0;
+    for _ in 0..trials {
+        let per_trial_dra = PublicBroadcastDRA::new(dist.clone(), alpha);
+        let mut vals = Vec::with_capacity(buyers);
+        for _ in 0..buyers {
+            vals.push(dist.sample(&mut rng));
+        }
+        let top_real = vals.iter().cloned().fold(0.0_f64, f64::max);
+        let false_bids = false_bids_from_model(&deviation, top_real);
+        let collateral = per_trial_dra.collateral(buyers);
+        let participants = (0..buyers).map(ParticipantId::Real).collect();
+        let mut session = ProtocolSession::new(
+            per_trial_dra,
+            RealNonMalleableCommitment,
+            rng.next_u64(),
+            schedule.clone(),
+            participants,
+        );
+        let mut now = 0u64;
+        let mut failed = false;
+        for (idx, bid) in vals.iter().enumerate() {
+            if session.advance_to(now).is_err()
+                || session.commit_real(idx, *bid, collateral).is_err()
+            {
+                failed = true;
+                break;
+            }
+            now += 1;
+        }
+        if failed {
+            deadline_failures += 1;
+            continue;
+        }
+        for (idx, fb) in false_bids.iter().enumerate() {
+            if session.advance_to(now).is_err()
+                || session
+                    .commit_false(idx, fb.bid, collateral, fb.reveal)
+                    .is_err()
+            {
+                failed = true;
+                break;
+            }
+            now += 1;
+        }
+        if failed || session.end_commit_phase().is_err() {
+            deadline_failures += 1;
+            continue;
+        }
+        now = schedule.commit_deadline;
+        for idx in 0..buyers {
+            if session.advance_to(now).is_err() || session.reveal(ParticipantId::Real(idx)).is_err()
+            {
+                failed = true;
+                break;
+            }
+            now += 1;
+        }
+        if failed {
+            deadline_failures += 1;
+            continue;
+        }
+        for (idx, fb) in false_bids.iter().enumerate() {
+            if fb.reveal {
+                if session.advance_to(now).is_err()
+                    || session.reveal(ParticipantId::False(idx)).is_err()
+                {
+                    failed = true;
+                    break;
+                }
+                now += 1;
+            }
+        }
+        if failed {
+            deadline_failures += 1;
+            continue;
+        }
+        if session.advance_to(schedule.reveal_deadline).is_err() {
+            deadline_failures += 1;
+            continue;
+        }
+        match session.end_reveal_and_resolve() {
+            Ok((outcome, _, _)) => {
+                revenue_sum += auctioneer_revenue(&outcome);
+                successes += 1;
+            }
+            Err(_) => deadline_failures += 1,
+        }
+    }
+    TimedSimulationReport {
+        successful_runs: successes,
+        deadline_failures,
+        average_revenue: if successes > 0 {
+            revenue_sum / successes as f64
+        } else {
+            0.0
+        },
+    }
+}
+
+/// Empirically verify the Lemma18/21 revenue bound by comparing deviation revenue against the optimal baseline.
+pub fn simulate_safe_deviation_bound<D: ValueDistribution + Clone>(
+    dist: D,
+    alpha: f64,
+    buyers: usize,
+    trials: usize,
+    false_bids: Vec<FalseBid>,
+    seed: u64,
+) -> SafeDeviationStats {
+    let dra = PublicBroadcastDRA::new(dist.clone(), alpha);
+    let mut rng = StdRng::seed_from_u64(seed);
+    let mut max_violation = 0.0_f64;
+    for _ in 0..trials {
+        let mut vals = Vec::with_capacity(buyers);
+        for _ in 0..buyers {
+            vals.push(dist.sample(&mut rng));
+        }
+        let base_seed = rng.next_u64();
+        let dev_seed = rng.next_u64();
+        let baseline = dra.run_with_false_bids(&vals, &[], Some(base_seed));
+        let deviated = dra.run_with_false_bids(&vals, &false_bids, Some(dev_seed));
+        let base_rev = auctioneer_revenue(&baseline);
+        let dev_rev = auctioneer_revenue(&deviated);
+        if dev_rev > base_rev + 1e-9 {
+            max_violation = max_violation.max(dev_rev - base_rev);
+        }
+    }
+    SafeDeviationStats {
+        satisfied: max_violation <= 1e-9,
+        max_violation,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commitment::PedersenRistrettoCommitment;
+    use crate::commitment::{
+        AuditedNonMalleableCommitment, PedersenRistrettoCommitment, RealNonMalleableCommitment,
+    };
     use crate::distribution::Exponential;
 
     #[test]
@@ -187,7 +361,10 @@ mod tests {
             1.0,
             3,
             200,
-            FalseBid { bid: 10.0, reveal: false },
+            FalseBid {
+                bid: 10.0,
+                reveal: false,
+            },
             123,
         );
         assert!(stats.baseline.is_finite());
@@ -215,9 +392,30 @@ mod tests {
             1.0,
             2,
             50,
-            DeviationModel::Fixed(FalseBid { bid: 3.0, reveal: true }),
+            DeviationModel::Fixed(FalseBid {
+                bid: 3.0,
+                reveal: true,
+            }),
             999,
             Backend::Pedersen(PedersenRistrettoCommitment),
+        );
+        assert!(dev.deviated_revenue.is_finite());
+    }
+
+    #[test]
+    fn simulation_runs_with_fischlin_backend() {
+        let dist = Exponential::new(1.0);
+        let dev = simulate_deviation_with_scheme(
+            dist,
+            1.0,
+            2,
+            50,
+            DeviationModel::Fixed(FalseBid {
+                bid: 3.0,
+                reveal: true,
+            }),
+            321,
+            Backend::Fischlin(RealNonMalleableCommitment),
         );
         assert!(dev.deviated_revenue.is_finite());
     }
@@ -230,25 +428,58 @@ mod tests {
             1.0,
             2,
             50,
-            DeviationModel::Fixed(FalseBid { bid: 3.0, reveal: true }),
-            321,
-            Backend::Audited(AuditedNonMalleableCommitment),
+            DeviationModel::Fixed(FalseBid {
+                bid: 3.0,
+                reveal: true,
+            }),
+            222,
+            Backend::Audited(AuditedNonMalleableCommitment::default()),
         );
         assert!(dev.deviated_revenue.is_finite());
     }
 
     #[test]
-    fn simulation_runs_with_external_backend() {
+    fn timed_protocol_simulation_runs() {
         let dist = Exponential::new(1.0);
-        let dev = simulate_deviation_with_scheme(
+        let schedule = PhaseTimings {
+            commit_deadline: 4,
+            reveal_deadline: 10,
+        };
+        let report = simulate_timed_protocol(
             dist,
             1.0,
             2,
-            50,
-            DeviationModel::Fixed(FalseBid { bid: 3.0, reveal: true }),
-            555,
-            Backend::External(ExternalNonMalleableCommitment),
+            3,
+            DeviationModel::Fixed(FalseBid {
+                bid: 5.0,
+                reveal: false,
+            }),
+            schedule,
+            2024,
         );
-        assert!(dev.deviated_revenue.is_finite());
+        assert!(report.successful_runs + report.deadline_failures > 0);
+    }
+
+    #[test]
+    fn safe_deviation_bound_holds_for_exponential() {
+        let dist = Exponential::new(1.0);
+        let dra = PublicBroadcastDRA::new(dist.clone(), 1.0);
+        let coll = dra.collateral(3);
+        let stats = simulate_safe_deviation_bound(
+            dist,
+            1.0,
+            3,
+            200,
+            vec![FalseBid {
+                bid: coll * 2.0,
+                reveal: false,
+            }],
+            1312,
+        );
+        assert!(
+            stats.satisfied,
+            "violation observed: {}",
+            stats.max_violation
+        );
     }
 }

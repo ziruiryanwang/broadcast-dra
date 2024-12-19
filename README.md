@@ -4,11 +4,15 @@ This repository implements the deferred revelation auction with public broadcast
 
 
 ## High-level design
-- `commitment`: programmable commitments (perfectly hiding/binding/non-malleable are modelled via SHA-256 placeholders).
+- `commitment`: programmable commitments (SHA-256 baseline, Pedersen/Ristretto, and a Fischlin–Fischlin-style non-malleable construction following [Fischlin & Fischlin, CRYPTO 2000](https://link.springer.com/chapter/10.1007/3-540-44598-6_25)).
+  An audited variant logs commitments to an append-only ledger and hands out receipts verified during audits.
 - `distribution`: value distribution traits and a few concrete examples (exponential, uniform), plus virtual value and reserve price helpers.
 - `collateral`: collateral function `f(n, D, α)` from the paper.
 - `auction`: public-broadcast DRA implementation with support for false bids, reveal validation, tie-breaking, and collateral flows.
 - `bin/demo`: example runner that simulates a round.
+
+### Commitment provenance
+- **Bulletproofs backend** (`--backend bulletproofs`): Powered by the [zkcrypto/bulletproofs](https://github.com/zkcrypto/bulletproofs) crate v5.0.0 (MIT) implementing the short range proofs from Bünz et al., *Bulletproofs: Short Proofs for Confidential Transactions and More*, IEEE S&P 2018. The downloaded crate archive has SHA-256 digest `012e2e5f88332083bd4235d445ae78081c00b2558443821a9ca5adfe1070073d`, recorded for provenance. The audited backend wraps this construction with the append-only receipt ledger described in Definition 5.
 
 ## CLI input/output
 `cargo run -- --input input.json` or `echo '{...}' | cargo run --`
@@ -25,7 +29,7 @@ Input JSON shape:
 }
 ```
 Supported distributions: `exponential {lambda}`, `uniform {low, high}`, `pareto {scale, shape}`, `lognormal {mu, sigma}`.
-Commitment backends: `sha` (default), `pedersen`, `audited` (tagged Pedersen wrapper), or `external` (placeholder for a vetted non-malleable scheme; swap in a real audited library for production).
+Commitment backends: `sha` (default), `pedersen`, `audited` (ledger-backed bulletproof commitments), `fischlin` (a non-malleable scheme mirroring Fischlin–Fischlin with Schnorr proofs over Ristretto), or `bulletproofs` (standalone zk-SNARK backed commitments).
 
 Output JSON shape:
 ```json
@@ -42,8 +46,14 @@ Output JSON shape:
 ```
 
 Flags:
-- `--backend {sha|pedersen}` overrides the JSON backend.
+- `--backend {sha|pedersen|fischlin}` overrides the JSON backend.
 - `--simulate --trials N` runs Monte Carlo using the provided distribution, alpha, backend, buyer count inferred from `valuations.len()`, and deviation given by `false_bids`, outputting simulation summary JSON.
+
+### Programmatic timed simulations
+The library now exposes `simulate_timed_protocol` and its `TimedSimulationReport`, which drive the full `ProtocolSession` with explicit commit/reveal deadlines, emit broadcast logs, and surface aggregate revenue plus deadline failures under the safe deviations described in the paper. These runs exercise the real-time auditing path and penalty logic.
+
+### Safe-deviation verification
+Use `simulate_safe_deviation_bound` to empirically confirm Lemmas 18–21: it compares the auctioneer’s revenue under a specified deviation (e.g., withheld false bids above the collateral) against the Myerson-optimal baseline and reports any violation margin. `centralized::adaptive_reserve_deviation` reproduces the adaptive-reserve attack from Definition 23 to show the centralized auction is not credible, while the broadcast simulations remain bounded.
 
 ## Running
 ```

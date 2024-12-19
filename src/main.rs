@@ -6,10 +6,10 @@ use clap::{Parser, ValueEnum};
 use serde::{Deserialize, Serialize};
 
 use broadcast_dra::{
-    FalseBid, LogNormal, Pareto, PublicBroadcastDRA, Uniform, ValueDistribution, Exponential,
-    NonMalleableShaCommitment, PedersenRistrettoCommitment, AuditedNonMalleableCommitment,
-    ExternalNonMalleableCommitment,
-    simulate_deviation_with_scheme, DeviationModel, SimulationResult,
+    AuditedNonMalleableCommitment, BulletproofsCommitment, DeviationModel, Exponential, FalseBid,
+    LogNormal, NonMalleableShaCommitment, Pareto, PedersenRistrettoCommitment,
+    PublicBroadcastDRA, RealNonMalleableCommitment, SimulationResult, Uniform,
+    ValueDistribution, simulate_deviation_with_scheme,
 };
 
 #[derive(Parser, Debug)]
@@ -67,7 +67,8 @@ enum CommitmentBackendSpec {
     Sha,
     Pedersen,
     Audited,
-    External,
+    Fischlin,
+    Bulletproofs,
 }
 
 fn default_backend() -> CommitmentBackendSpec {
@@ -110,10 +111,16 @@ fn main() -> io::Result<()> {
         run_simulation(req, args.trials)
     } else {
         match req.distribution {
-            DistributionSpec::Exponential { lambda } => run_with_dist(Exponential::new(lambda), req),
+            DistributionSpec::Exponential { lambda } => {
+                run_with_dist(Exponential::new(lambda), req)
+            }
             DistributionSpec::Uniform { low, high } => run_with_dist(Uniform::new(low, high), req),
-            DistributionSpec::Pareto { scale, shape } => run_with_dist(Pareto::new(scale, shape), req),
-            DistributionSpec::Lognormal { mu, sigma } => run_with_dist(LogNormal::new(mu, sigma), req),
+            DistributionSpec::Pareto { scale, shape } => {
+                run_with_dist(Pareto::new(scale, shape), req)
+            }
+            DistributionSpec::Lognormal { mu, sigma } => {
+                run_with_dist(LogNormal::new(mu, sigma), req)
+            }
         }
     }
 }
@@ -127,8 +134,13 @@ fn run_with_dist<D: ValueDistribution + 'static>(dist: D, req: AuctionRequest) -
     let mut backend = match req.commitment_backend {
         CommitmentBackendSpec::Sha => Backend::Sha(NonMalleableShaCommitment),
         CommitmentBackendSpec::Pedersen => Backend::Pedersen(PedersenRistrettoCommitment),
-        CommitmentBackendSpec::Audited => Backend::Audited(AuditedNonMalleableCommitment),
-        CommitmentBackendSpec::External => Backend::External(ExternalNonMalleableCommitment),
+        CommitmentBackendSpec::Audited => {
+            Backend::Audited(AuditedNonMalleableCommitment::default())
+        }
+        CommitmentBackendSpec::Fischlin => Backend::Fischlin(RealNonMalleableCommitment),
+        CommitmentBackendSpec::Bulletproofs => {
+            Backend::Bulletproofs(BulletproofsCommitment::default())
+        }
     };
     let fbs: Vec<FalseBid> = req
         .false_bids
@@ -139,10 +151,21 @@ fn run_with_dist<D: ValueDistribution + 'static>(dist: D, req: AuctionRequest) -
         })
         .collect();
     let outcome = match &mut backend {
-        Backend::Sha(s) => dra.run_with_false_bids_using_scheme(&req.valuations, &fbs, req.rng_seed, s),
-        Backend::Pedersen(p) => dra.run_with_false_bids_using_scheme(&req.valuations, &fbs, req.rng_seed, p),
-        Backend::Audited(a) => dra.run_with_false_bids_using_scheme(&req.valuations, &fbs, req.rng_seed, a),
-        Backend::External(e) => dra.run_with_false_bids_using_scheme(&req.valuations, &fbs, req.rng_seed, e),
+        Backend::Sha(s) => {
+            dra.run_with_false_bids_using_scheme(&req.valuations, &fbs, req.rng_seed, s)
+        }
+        Backend::Pedersen(p) => {
+            dra.run_with_false_bids_using_scheme(&req.valuations, &fbs, req.rng_seed, p)
+        }
+        Backend::Audited(a) => {
+            dra.run_with_false_bids_using_scheme(&req.valuations, &fbs, req.rng_seed, a)
+        }
+        Backend::Fischlin(f) => {
+            dra.run_with_false_bids_using_scheme(&req.valuations, &fbs, req.rng_seed, f)
+        }
+        Backend::Bulletproofs(b) => {
+            dra.run_with_false_bids_using_scheme(&req.valuations, &fbs, req.rng_seed, b)
+        }
     };
 
     let resp = AuctionResponse {
@@ -177,8 +200,13 @@ fn run_simulation(req: AuctionRequest, trials: usize) -> io::Result<()> {
     let backend = match req.commitment_backend {
         CommitmentBackendSpec::Sha => Backend::Sha(NonMalleableShaCommitment),
         CommitmentBackendSpec::Pedersen => Backend::Pedersen(PedersenRistrettoCommitment),
-        CommitmentBackendSpec::Audited => Backend::Audited(AuditedNonMalleableCommitment),
-        CommitmentBackendSpec::External => Backend::External(ExternalNonMalleableCommitment),
+        CommitmentBackendSpec::Audited => {
+            Backend::Audited(AuditedNonMalleableCommitment::default())
+        }
+        CommitmentBackendSpec::Fischlin => Backend::Fischlin(RealNonMalleableCommitment),
+        CommitmentBackendSpec::Bulletproofs => {
+            Backend::Bulletproofs(BulletproofsCommitment::default())
+        }
     };
     let deviation = if req.false_bids.len() > 1 {
         DeviationModel::Multiple(
@@ -196,7 +224,10 @@ fn run_simulation(req: AuctionRequest, trials: usize) -> io::Result<()> {
             reveal: fb.reveal,
         })
     } else {
-        DeviationModel::Fixed(FalseBid { bid: 0.0, reveal: true })
+        DeviationModel::Fixed(FalseBid {
+            bid: 0.0,
+            reveal: true,
+        })
     };
 
     let sims: SimulationResult = match req.distribution {
@@ -250,7 +281,10 @@ mod tests {
     #[test]
     fn run_with_dist_executes() {
         let req = AuctionRequest {
-            distribution: DistributionSpec::Uniform { low: 0.0, high: 10.0 },
+            distribution: DistributionSpec::Uniform {
+                low: 0.0,
+                high: 10.0,
+            },
             valuations: vec![3.0, 5.0],
             false_bids: vec![],
             alpha: None,
@@ -263,9 +297,15 @@ mod tests {
     #[test]
     fn run_simulation_executes() {
         let req = AuctionRequest {
-            distribution: DistributionSpec::Uniform { low: 0.0, high: 10.0 },
+            distribution: DistributionSpec::Uniform {
+                low: 0.0,
+                high: 10.0,
+            },
             valuations: vec![0.0, 0.0, 0.0],
-            false_bids: vec![FalseBidSpec { bid: 4.0, reveal: true }],
+            false_bids: vec![FalseBidSpec {
+                bid: 4.0,
+                reveal: true,
+            }],
             alpha: Some(1.0),
             rng_seed: Some(3),
             commitment_backend: CommitmentBackendSpec::Pedersen,

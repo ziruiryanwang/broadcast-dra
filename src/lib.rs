@@ -11,7 +11,9 @@ pub use auction::{
     AuctionOutcome, AuditError, CommitmentEvent, FalseBid, PublicBroadcastDRA, RevealEvent,
     Transcript, audit_transcript,
 };
-pub use centralized::{AdaptiveReserveDeviationReport, adaptive_reserve_deviation};
+pub use centralized::{
+    AdaptiveReserveDeviationReport, CentralizedProtocolDriver, adaptive_reserve_deviation,
+};
 pub use collateral::collateral_requirement;
 pub use commitment::{
     AuditLedger, AuditReceipt, AuditedNonMalleableCommitment, BulletproofProofData,

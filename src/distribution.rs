@@ -274,3 +274,51 @@ impl ValueDistribution for LogNormal {
         dist.sample(rng)
     }
 }
+
+/// Equal-revenue distribution used in the Theorem 25 counterexample: F(x)=1-scale/x for x>=scale.
+#[derive(Clone, Debug)]
+pub struct EqualRevenue {
+    pub scale: f64,
+}
+
+impl EqualRevenue {
+    pub fn new(scale: f64) -> Self {
+        assert!(scale > 0.0, "scale must be positive");
+        Self { scale }
+    }
+}
+
+impl ValueDistribution for EqualRevenue {
+    fn cdf(&self, x: f64) -> f64 {
+        if x < self.scale {
+            0.0
+        } else {
+            1.0 - self.scale / x
+        }
+    }
+
+    fn pdf(&self, x: f64) -> f64 {
+        if x < self.scale {
+            0.0
+        } else {
+            self.scale / (x * x)
+        }
+    }
+
+    fn virtual_value(&self, x: f64) -> f64 {
+        if x < self.scale {
+            f64::NEG_INFINITY
+        } else {
+            0.0
+        }
+    }
+
+    fn reserve_price(&self) -> f64 {
+        self.scale
+    }
+
+    fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> f64 {
+        let u: f64 = rng.gen_range(0.0..1.0);
+        self.scale / (1.0 - u)
+    }
+}

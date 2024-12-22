@@ -6,10 +6,11 @@ This repository implements the deferred revelation auction with public broadcast
 ## High-level design
 - `commitment`: programmable commitments (SHA-256 baseline, Pedersen/Ristretto, and a Fischlinâ€“Fischlin-style non-malleable construction following [Fischlin & Fischlin, CRYPTO 2000](https://link.springer.com/chapter/10.1007/3-540-44598-6_25)).
   An audited variant logs commitments to an append-only ledger and hands out receipts verified during audits.
-- `distribution`: value distribution traits and a few concrete examples (exponential, uniform), plus virtual value and reserve price helpers.
+- `distribution`: value distribution traits and a few concrete examples (exponential, uniform, equal-revenue, etc.), plus virtual value and reserve price helpers.
 - `collateral`: collateral function `f(n, D, Î±)` from the paper.
 - `auction`: public-broadcast DRA implementation with support for false bids, reveal validation, tie-breaking, and collateral flows.
 - `bin/demo`: example runner that simulates a round.
+- `centralized`: centralized protocol driver plus selective-delivery channel/logs for Exampleâ€? and Definitionâ€?3.
 
 ### Commitment provenance
 - **Bulletproofs backend** (`--backend bulletproofs`): Powered by the [zkcrypto/bulletproofs](https://github.com/zkcrypto/bulletproofs) crate v5.0.0 (MIT) implementing the short range proofs from BÃ¼nz et al., *Bulletproofs: Short Proofs for Confidential Transactions and More*, IEEE S&P 2018. The downloaded crate archive has SHA-256 digest `012e2e5f88332083bd4235d445ae78081c00b2558443821a9ca5adfe1070073d`, recorded for provenance. The audited backend wraps this construction with the append-only receipt ledger described in Definition 5.
@@ -28,7 +29,7 @@ Input JSON shape:
   "commitment_backend": "pedersen"
 }
 ```
-Supported distributions: `exponential {lambda}`, `uniform {low, high}`, `pareto {scale, shape}`, `lognormal {mu, sigma}`.
+Supported distributions: `exponential {lambda}`, `uniform {low, high}`, `pareto {scale, shape}`, `lognormal {mu, sigma}`, `equal_revenue {scale}`.
 Commitment backends: `sha` (default), `pedersen`, `audited` (ledger-backed bulletproof commitments), `fischlin` (a non-malleable scheme mirroring Fischlinâ€“Fischlin with Schnorr proofs over Ristretto), or `bulletproofs` (standalone zk-SNARK backed commitments).
 
 Output JSON shape:
@@ -46,14 +47,33 @@ Output JSON shape:
 ```
 
 Flags:
-- `--backend {sha|pedersen|fischlin}` overrides the JSON backend.
+- `--backend {sha|pedersen|fischlin|audited|bulletproofs}` overrides the JSON backend.
 - `--simulate --trials N` runs Monte Carlo using the provided distribution, alpha, backend, buyer count inferred from `valuations.len()`, and deviation given by `false_bids`, outputting simulation summary JSON.
+- `--scenario {example1|adaptive|counterexample}` prints the reproducible Exampleâ€?/Definitionâ€?3/Theoremâ€?5 scripts.
+
+### Scenario runbook
+```
+cargo run -- --scenario example1
+cargo run -- --scenario adaptive
+cargo run -- --scenario counterexample
+```
+
+### Audit/provenance
+`cargo run --bin audit` prints the recorded SHA256 digests for the bulletproofs crate (v5.0.0) and the provided TeX source (`reference_material/Credible_Optimal_Auctions_public_broadcast_full.tex`).
 
 ### Programmatic timed simulations
 The library now exposes `simulate_timed_protocol` and its `TimedSimulationReport`, which drive the full `ProtocolSession` with explicit commit/reveal deadlines, emit broadcast logs, and surface aggregate revenue plus deadline failures under the safe deviations described in the paper. These runs exercise the real-time auditing path and penalty logic.
 
 ### Safe-deviation verification
-Use `simulate_safe_deviation_bound` to empirically confirm Lemmas 18â€“21: it compares the auctioneerâ€™s revenue under a specified deviation (e.g., withheld false bids above the collateral) against the Myerson-optimal baseline and reports any violation margin. `centralized::adaptive_reserve_deviation` reproduces the adaptive-reserve attack from Definitionâ€¯23 to show the centralized auction is not credible, while the broadcast simulations remain bounded.
+Use `simulate_safe_deviation_bound` to empirically confirm Lemmas 18â€?1: it compares the auctioneerâ€™s revenue under a specified deviation (e.g., withheld false bids above the collateral) against the Myerson-optimal baseline and reports any violation margin. `centralized::adaptive_reserve_deviation` reproduces the adaptive-reserve attack from Definitionâ€?3 to show the centralized auction is not credible, while the broadcast simulations remain bounded. Property tests in `simulation.rs` (`proptest` powered) cover Uniform, Exponential, and Pareto (Î±>0) families to statistically validate these lemmas.
+
+### Paper â†?code map
+- **Theoremâ€?1** â†?`collateral::collateral_requirement`, `simulation::tests::safe_deviation_bound_holds_for_exponential`.
+- **Definitionâ€?** â†?`auction::audit_transcript`.
+- **Definitionâ€?3 / Theoremâ€?2** â†?`centralized::scripted_adaptive_reserve_run` and `centralized::tests::adaptive_reserve_driver_exceeds_baseline_only_when_censored`.
+- **Exampleâ€?** â†?`centralized::tests::example_one_censors_commitment`.
+- **Theoremâ€?5** â†?`distribution::EqualRevenue` plus `simulation::tests::equal_revenue_distribution_breaks_single_buyer_bound`.
+- **Lemmasâ€?8â€?0** â†?`simulation::simulate_safe_deviation_bound` and the three `proptest!` suites in `simulation.rs`.
 
 ## Running
 ```
@@ -64,3 +84,5 @@ cargo run --bin demo
 ```
 cargo test
 ```
+
+

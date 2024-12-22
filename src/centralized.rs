@@ -1,11 +1,13 @@
 use crate::auction::{
     AuctionOutcome, FalseBid, ParticipantId, PhaseTimings, PublicBroadcastDRA, Transcript,
 };
-use crate::commitment::CommitmentScheme;
+use crate::commitment::{CommitmentScheme, NonMalleableShaCommitment};
 use crate::distribution::ValueDistribution;
 use crate::network::{CentralizedChannel, MessagePayload};
 use crate::protocol::Phase;
+use serde::Serialize;
 
+/// Mirrors ProtocolSession with a centralized forwarding channel to script Example 1 / Definition 23.
 #[derive(Clone, Debug)]
 pub struct CentralizedProtocolDriver<D: ValueDistribution, S: CommitmentScheme> {
     dra: PublicBroadcastDRA<D>,
@@ -170,7 +172,67 @@ impl<D: ValueDistribution, S: CommitmentScheme + Clone> CentralizedProtocolDrive
     }
 }
 
+/// Outcome of the adaptive-reserve deviation used in Theorem 22.
 #[derive(Clone, Debug)]
+pub struct CentralizedDeviationResult {
+    pub report: AdaptiveReserveDeviationReport,
+    pub channel: CentralizedChannel,
+}
+
+/// Script Definition 23's adaptive-reserve deviation using the centralized driver.
+pub fn scripted_adaptive_reserve_run<D: ValueDistribution + Clone>(
+    dist: D,
+    alpha: f64,
+    buyer_a: f64,
+    buyer_b: f64,
+    threshold: f64,
+) -> CentralizedDeviationResult {
+    let baseline_dra = PublicBroadcastDRA::new(dist.clone(), alpha);
+    let baseline = baseline_dra.run_with_false_bids(&[buyer_a, buyer_b], &[], Some(31));
+    let baseline_revenue = baseline.payment + baseline.forfeited_to_auctioneer;
+    let schedule = PhaseTimings {
+        commit_deadline: 4,
+        reveal_deadline: 8,
+    };
+    let mut driver = CentralizedProtocolDriver::new(
+        PublicBroadcastDRA::new(dist, alpha),
+        NonMalleableShaCommitment,
+        2,
+        schedule,
+    );
+    driver.commit_real(0, buyer_a);
+    driver.commit_real(1, buyer_b);
+    // Buyer A's commitment is never forwarded to buyer B.
+    driver.forward_commit_to(ParticipantId::Real(1), &[ParticipantId::Real(0)]);
+    driver.announce_commit_end_to(&[ParticipantId::Real(0)]);
+    driver.publish_reveal_to(
+        ParticipantId::Real(0),
+        &[ParticipantId::Auctioneer],
+        true,
+    );
+    if buyer_a >= threshold {
+        let false_bid = buyer_a + driver.collateral();
+        driver.commit_false(0, false_bid, true);
+        driver.forward_commit_to(ParticipantId::False(0), &[ParticipantId::Real(1)]);
+    }
+    driver.announce_commit_end_to(&[ParticipantId::Real(1)]);
+    driver.publish_reveal_to(
+        ParticipantId::Real(1),
+        &[ParticipantId::Auctioneer],
+        true,
+    );
+    let (outcome, _, channel) = driver.resolve(Some(57));
+    let deviation_revenue = outcome.payment + outcome.forfeited_to_auctioneer;
+    CentralizedDeviationResult {
+        report: AdaptiveReserveDeviationReport {
+            baseline_revenue,
+            deviation_revenue,
+        },
+        channel,
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
 pub struct AdaptiveReserveDeviationReport {
     pub baseline_revenue: f64,
     pub deviation_revenue: f64,
@@ -232,11 +294,12 @@ fn adaptive_revenue(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::auction::PhaseTimings;
+    use crate::auction::{PhaseTimings, PublicBroadcastDRA};
     use crate::commitment::NonMalleableShaCommitment;
     use crate::distribution::{Exponential, Uniform};
     use crate::network::MessagePayload;
     use crate::protocol::ProtocolSession;
+    use crate::simulation::{DeviationModel, simulate_safe_deviation_bound};
 
     #[test]
     fn adaptive_reserve_attack_increases_revenue() {
@@ -312,5 +375,34 @@ mod tests {
                 from: ParticipantId::Real(0)
             }
         )));
+    }
+
+    #[test]
+    fn adaptive_reserve_driver_exceeds_baseline_only_when_censored() {
+        let dist = Exponential::new(0.01);
+        let threshold = 120.0;
+        let result =
+            scripted_adaptive_reserve_run(dist.clone(), 1.0, 150.0, 400.0, threshold);
+        assert!(
+            result.report.deviation_revenue > result.report.baseline_revenue,
+            "centralized run should outperform baseline"
+        );
+        let coll = PublicBroadcastDRA::new(dist.clone(), 1.0).collateral(2);
+        let safe = simulate_safe_deviation_bound(
+            dist,
+            1.0,
+            2,
+            250,
+            DeviationModel::Multiple(vec![FalseBid {
+                bid: coll,
+                reveal: false,
+            }]),
+            5150,
+        );
+        assert!(
+            safe.satisfied,
+            "broadcast simulation should remain bounded: {}",
+            safe.max_violation
+        );
     }
 }

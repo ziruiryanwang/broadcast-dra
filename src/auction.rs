@@ -495,7 +495,7 @@ pub enum AuditError {
 }
 
 /// Audit a transcript against a commitment scheme to ensure the openings match commitments and
-/// every reveal references a committed party.
+/// every reveal references a committed party (Definition 8).
 pub fn audit_transcript<S: CommitmentScheme>(
     transcript: &Transcript,
     scheme: &mut S,

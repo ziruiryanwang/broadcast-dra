@@ -312,13 +312,13 @@ pub fn simulate_timed_protocol<D: ValueDistribution + Clone>(
     }
 }
 
-/// Empirically verify the Lemma18/21 revenue bound by comparing deviation revenue against the optimal baseline.
+/// Empirically verify the Lemma 18/20 revenue bounds by comparing deviation revenue against the optimal baseline.
 pub fn simulate_safe_deviation_bound<D: ValueDistribution + Clone>(
     dist: D,
     alpha: f64,
     buyers: usize,
     trials: usize,
-    false_bids: Vec<FalseBid>,
+    deviation: DeviationModel,
     seed: u64,
 ) -> SafeDeviationStats {
     let dra = PublicBroadcastDRA::new(dist.clone(), alpha);
@@ -332,6 +332,8 @@ pub fn simulate_safe_deviation_bound<D: ValueDistribution + Clone>(
         let base_seed = rng.next_u64();
         let dev_seed = rng.next_u64();
         let baseline = dra.run_with_false_bids(&vals, &[], Some(base_seed));
+        let top_real = vals.iter().cloned().fold(0.0_f64, f64::max);
+        let false_bids = false_bids_from_model(&deviation, top_real);
         let deviated = dra.run_with_false_bids(&vals, &false_bids, Some(dev_seed));
         let base_rev = auctioneer_revenue(&baseline);
         let dev_rev = auctioneer_revenue(&deviated);
@@ -351,7 +353,8 @@ mod tests {
     use crate::commitment::{
         AuditedNonMalleableCommitment, PedersenRistrettoCommitment, RealNonMalleableCommitment,
     };
-    use crate::distribution::Exponential;
+    use crate::distribution::{EqualRevenue, Exponential, Pareto, Uniform};
+    use proptest::prelude::*;
 
     #[test]
     fn simulation_runs_and_returns_finite_values() {
@@ -470,10 +473,10 @@ mod tests {
             1.0,
             3,
             200,
-            vec![FalseBid {
+            DeviationModel::Multiple(vec![FalseBid {
                 bid: coll * 2.0,
                 reveal: false,
-            }],
+            }]),
             1312,
         );
         assert!(
@@ -481,5 +484,85 @@ mod tests {
             "violation observed: {}",
             stats.max_violation
         );
+    }
+
+    /// Theorem 25 counterexample: single-buyer equal-revenue distribution admits a profitable
+    /// threshold reveal deviation even with broadcast commitments.
+    #[test]
+    fn equal_revenue_distribution_breaks_single_buyer_bound() {
+        let dist = EqualRevenue::new(1.0);
+        let dra = PublicBroadcastDRA::new(dist.clone(), 0.5);
+        let collateral = dra.collateral(1);
+        let bid = dist.reserve_price() + 2.0 * collateral;
+        let stats = simulate_safe_deviation_bound(
+            dist,
+            0.5,
+            1,
+            300,
+            DeviationModel::ThresholdReveal {
+                bid,
+                reveal_if_top_at_least: bid,
+            },
+            4040,
+        );
+        assert!(
+            !stats.satisfied && stats.max_violation > 0.0,
+            "expected violation for counterexample, saw {}",
+            stats.max_violation
+        );
+    }
+
+    proptest! {
+        #[test]
+        fn uniform_distribution_respects_bound(seed in 1u64..1_000_000, buyers in 2usize..4usize) {
+            let dist = Uniform::new(0.0, 10.0);
+            let dra = PublicBroadcastDRA::new(dist.clone(), 1.0);
+            let coll = dra.collateral(buyers);
+            let stats = simulate_safe_deviation_bound(
+                dist,
+                1.0,
+                buyers,
+                80,
+                DeviationModel::Multiple(vec![FalseBid { bid: coll, reveal: false }]),
+                seed,
+            );
+            prop_assert!(stats.satisfied);
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn exponential_distribution_respects_bound(seed in 1u64..1_000_000, buyers in 2usize..4usize) {
+            let dist = Exponential::new(1.0);
+            let dra = PublicBroadcastDRA::new(dist.clone(), 1.0);
+            let coll = dra.collateral(buyers);
+            let stats = simulate_safe_deviation_bound(
+                dist,
+                1.0,
+                buyers,
+                80,
+                DeviationModel::Multiple(vec![FalseBid { bid: coll * 1.5, reveal: false }]),
+                seed,
+            );
+            prop_assert!(stats.satisfied);
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn pareto_distribution_respects_bound(seed in 1u64..1_000_000, buyers in 2usize..4usize) {
+            let dist = Pareto::new(1.0, 2.0);
+            let dra = PublicBroadcastDRA::new(dist.clone(), 0.4);
+            let coll = dra.collateral(buyers);
+            let stats = simulate_safe_deviation_bound(
+                dist,
+                0.4,
+                buyers,
+                80,
+                DeviationModel::Multiple(vec![FalseBid { bid: coll, reveal: false }]),
+                seed,
+            );
+            prop_assert!(stats.satisfied);
+        }
     }
 }

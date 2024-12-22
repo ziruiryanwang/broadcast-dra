@@ -12,7 +12,8 @@ pub use auction::{
     Transcript, audit_transcript,
 };
 pub use centralized::{
-    AdaptiveReserveDeviationReport, CentralizedProtocolDriver, adaptive_reserve_deviation,
+    AdaptiveReserveDeviationReport, CentralizedDeviationResult, CentralizedProtocolDriver,
+    adaptive_reserve_deviation, scripted_adaptive_reserve_run,
 };
 pub use collateral::collateral_requirement;
 pub use commitment::{
@@ -20,8 +21,8 @@ pub use commitment::{
     BulletproofsCommitment, Commitment, CommitmentScheme, NonMalleableShaCommitment,
     PedersenRistrettoCommitment, RealNonMalleableCommitment,
 };
-pub use distribution::{Exponential, LogNormal, Pareto, Uniform, ValueDistribution};
-pub use protocol::{Phase, ProtocolError, ProtocolSession};
+pub use distribution::{EqualRevenue, Exponential, LogNormal, Pareto, Uniform, ValueDistribution};
+pub use protocol::{Phase, PhaseTimings, ProtocolError, ProtocolSession};
 pub use simulation::{
     Backend, DeviationModel, RevenueStats, SafeDeviationStats, SimulationResult,
     TimedSimulationReport, simulate_deviation, simulate_deviation_with_scheme,

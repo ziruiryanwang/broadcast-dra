@@ -1,6 +1,7 @@
 use crate::distribution::ValueDistribution;
 
-/// Collateral function f(n, D) from Theorem 21.
+/// Collateral threshold \(f(n,D)\) from Theorem 21 that deters shill withholding for
+/// \(\alpha\)-strongly regular distributions.
 pub fn collateral_requirement<D: ValueDistribution>(n: usize, dist: &D, alpha: f64) -> f64 {
     assert!(n > 0, "number of buyers must be positive");
     assert!(alpha > 0.0, "alpha must be positive");

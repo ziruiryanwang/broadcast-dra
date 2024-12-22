@@ -10,7 +10,7 @@ This repository implements the deferred revelation auction with public broadcast
 - `collateral`: collateral function `f(n, D, Î±)` from the paper.
 - `auction`: public-broadcast DRA implementation with support for false bids, reveal validation, tie-breaking, and collateral flows.
 - `bin/demo`: example runner that simulates a round.
-- `centralized`: centralized protocol driver plus selective-delivery channel/logs for Exampleâ€? and Definitionâ€?3.
+- `centralized`: centralized protocol driver plus selective-delivery channel/logs for Example 1 and Definition 23.
 
 ### Commitment provenance
 - **Bulletproofs backend** (`--backend bulletproofs`): Powered by the [zkcrypto/bulletproofs](https://github.com/zkcrypto/bulletproofs) crate v5.0.0 (MIT) implementing the short range proofs from BÃ¼nz et al., *Bulletproofs: Short Proofs for Confidential Transactions and More*, IEEE S&P 2018. The downloaded crate archive has SHA-256 digest `012e2e5f88332083bd4235d445ae78081c00b2558443821a9ca5adfe1070073d`, recorded for provenance. The audited backend wraps this construction with the append-only receipt ledger described in Definition 5.
@@ -49,7 +49,7 @@ Output JSON shape:
 Flags:
 - `--backend {sha|pedersen|fischlin|audited|bulletproofs}` overrides the JSON backend.
 - `--simulate --trials N` runs Monte Carlo using the provided distribution, alpha, backend, buyer count inferred from `valuations.len()`, and deviation given by `false_bids`, outputting simulation summary JSON.
-- `--scenario {example1|adaptive|counterexample}` prints the reproducible Exampleâ€?/Definitionâ€?3/Theoremâ€?5 scripts.
+- `--scenario {example1|adaptive|counterexample}` prints the reproducible Example 1/Definition 23/Theorem 25 scripts.
 
 ### Scenario runbook
 ```
@@ -65,15 +65,15 @@ cargo run -- --scenario counterexample
 The library now exposes `simulate_timed_protocol` and its `TimedSimulationReport`, which drive the full `ProtocolSession` with explicit commit/reveal deadlines, emit broadcast logs, and surface aggregate revenue plus deadline failures under the safe deviations described in the paper. These runs exercise the real-time auditing path and penalty logic.
 
 ### Safe-deviation verification
-Use `simulate_safe_deviation_bound` to empirically confirm Lemmas 18â€?1: it compares the auctioneerâ€™s revenue under a specified deviation (e.g., withheld false bids above the collateral) against the Myerson-optimal baseline and reports any violation margin. `centralized::adaptive_reserve_deviation` reproduces the adaptive-reserve attack from Definitionâ€?3 to show the centralized auction is not credible, while the broadcast simulations remain bounded. Property tests in `simulation.rs` (`proptest` powered) cover Uniform, Exponential, and Pareto (Î±>0) families to statistically validate these lemmas.
+Use simulate_safe_deviation_bound to empirically confirm Lemmas 18-21: it compares the auctioneer's revenue under a specified deviation (e.g., withheld false bids above the collateral) against the Myerson-optimal baseline and reports any violation margin. centralized::adaptive_reserve_deviation reproduces the adaptive-reserve attack from Definition 23 to show the centralized auction is not credible, while the broadcast simulations remain bounded. Property tests in simulation.rs (proptest powered) cover Uniform, Exponential, and Pareto (alpha>0) families to statistically validate these lemmas.
 
-### Paper â†?code map
-- **Theoremâ€?1** â†?`collateral::collateral_requirement`, `simulation::tests::safe_deviation_bound_holds_for_exponential`.
-- **Definitionâ€?** â†?`auction::audit_transcript`.
-- **Definitionâ€?3 / Theoremâ€?2** â†?`centralized::scripted_adaptive_reserve_run` and `centralized::tests::adaptive_reserve_driver_exceeds_baseline_only_when_censored`.
-- **Exampleâ€?** â†?`centralized::tests::example_one_censors_commitment`.
-- **Theoremâ€?5** â†?`distribution::EqualRevenue` plus `simulation::tests::equal_revenue_distribution_breaks_single_buyer_bound`.
-- **Lemmasâ€?8â€?0** â†?`simulation::simulate_safe_deviation_bound` and the three `proptest!` suites in `simulation.rs`.
+### Paper-to-code map
+- **Theorem 21** -> collateral::collateral_requirement, simulation::tests::safe_deviation_bound_holds_for_exponential.
+- **Definition 8** -> auction::audit_transcript.
+- **Definition 23 / Theorem 22** -> centralized::scripted_adaptive_reserve_run and centralized::tests::adaptive_reserve_driver_exceeds_baseline_only_when_censored.
+- **Example 1** -> centralized::tests::example_one_censors_commitment.
+- **Theorem 25** -> distribution::EqualRevenue plus simulation::tests::equal_revenue_distribution_breaks_single_buyer_bound.
+- **Lemmas 18-20** -> simulation::simulate_safe_deviation_bound and the three proptest! suites in simulation.rs.
 
 ## Running
 ```

@@ -430,7 +430,7 @@ mod tests {
             dist,
             1.0,
             2,
-            50,
+            3,
             DeviationModel::Fixed(FalseBid {
                 bid: 3.0,
                 reveal: true,

@@ -8,8 +8,8 @@ pub mod protocol;
 pub mod simulation;
 
 pub use auction::{
-    AuctionOutcome, AuditError, CommitmentEvent, FalseBid, PublicBroadcastDRA, RevealEvent,
-    Transcript, audit_transcript,
+    AuctionOutcome, AuditError, CommitmentEvent, FalseBid, ParticipantId, PublicBroadcastDRA,
+    RevealEvent, Transcript, audit_transcript,
 };
 pub use centralized::{
     AdaptiveReserveDeviationReport, CentralizedDeviationResult, CentralizedProtocolDriver,
@@ -22,7 +22,8 @@ pub use commitment::{
     PedersenRistrettoCommitment, RealNonMalleableCommitment,
 };
 pub use distribution::{EqualRevenue, Exponential, LogNormal, Pareto, Uniform, ValueDistribution};
-pub use protocol::{Phase, PhaseTimings, ProtocolError, ProtocolSession};
+pub use auction::PhaseTimings;
+pub use protocol::{Phase, ProtocolError, ProtocolSession};
 pub use simulation::{
     Backend, DeviationModel, RevenueStats, SafeDeviationStats, SimulationResult,
     TimedSimulationReport, simulate_deviation, simulate_deviation_with_scheme,

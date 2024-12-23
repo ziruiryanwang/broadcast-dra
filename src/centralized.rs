@@ -104,6 +104,16 @@ impl<D: ValueDistribution, S: CommitmentScheme + Clone> CentralizedProtocolDrive
         );
     }
 
+    /// Send end-of-commit notices to disjoint subsets (models staggered delivery).
+    pub fn announce_commit_end_staggered(
+        &mut self,
+        first_batch: &[ParticipantId],
+        second_batch: &[ParticipantId],
+    ) {
+        self.announce_commit_end_to(first_batch);
+        self.announce_commit_end_to(second_batch);
+    }
+
     pub fn announce_reveal_end_to(&mut self, recipients: &[ParticipantId]) {
         self.channel.broadcast_subset(
             ParticipantId::Auctioneer,
@@ -375,6 +385,34 @@ mod tests {
                 from: ParticipantId::Real(0)
             }
         )));
+    }
+
+    #[test]
+    fn staggered_commit_end_produces_asymmetric_views() {
+        let dist = Uniform::new(0.0, 20.0);
+        let driver_dra = PublicBroadcastDRA::new(dist, 1.0);
+        let schedule = PhaseTimings {
+            commit_deadline: 4,
+            reveal_deadline: 8,
+        };
+        let mut driver =
+            CentralizedProtocolDriver::new(driver_dra, NonMalleableShaCommitment, 2, schedule);
+        driver.commit_real(0, 7.0);
+        driver.commit_real(1, 6.0);
+        driver.announce_commit_end_staggered(
+            &[ParticipantId::Real(0)],
+            &[ParticipantId::Real(1)],
+        );
+        let omissions_b = driver.channel().omitted_for(&ParticipantId::Real(1));
+        let omissions_a = driver.channel().omitted_for(&ParticipantId::Real(0));
+        assert!(
+            omissions_b.iter().any(|o| matches!(o.payload, MessagePayload::EndPhase { phase: Phase::Commit })),
+            "buyer B should miss early commit-end notice"
+        );
+        assert!(
+            omissions_a.iter().any(|o| matches!(o.payload, MessagePayload::EndPhase { phase: Phase::Commit })),
+            "buyer A should miss late commit-end notice"
+        );
     }
 
     #[test]

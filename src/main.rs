@@ -38,6 +38,10 @@ struct CliArgs {
     /// Run a canned demonstration scenario instead of a free-form auction.
     #[arg(long, value_enum)]
     scenario: Option<ScenarioSpec>,
+
+    /// If set, emit an audit/provenance report (alias for `cargo audit` target).
+    #[arg(long)]
+    audit: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -83,6 +87,7 @@ enum ScenarioSpec {
     Example1,
     Adaptive,
     Counterexample,
+    Centralized,
 }
 
 fn default_backend() -> CommitmentBackendSpec {
@@ -105,6 +110,10 @@ type Backend = broadcast_dra::Backend;
 
 fn main() -> io::Result<()> {
     let args = CliArgs::parse();
+    if args.audit {
+        broadcast_dra::run_audit();
+        return Ok(());
+    }
     if let Some(scenario) = args.scenario {
         return run_scenario(scenario);
     }
@@ -378,6 +387,18 @@ fn run_scenario(spec: ScenarioSpec) -> io::Result<()> {
                 9001,
             );
             let payload = CounterexampleOutput { stats, bid };
+            serde_json::to_writer_pretty(io::stdout(), &payload)?;
+        }
+        ScenarioSpec::Centralized => {
+            // Script the centralized adaptive deviation with omitted delivery (Definition 23).
+            let CentralizedDeviationResult { report, channel } =
+                scripted_adaptive_reserve_run(Exponential::new(0.01), 1.0, 150.0, 400.0, 120.0);
+            let (deliveries, omissions) = summarize_channel(&channel);
+            let payload = AdaptiveScenarioOutput {
+                report,
+                deliveries,
+                omissions,
+            };
             serde_json::to_writer_pretty(io::stdout(), &payload)?;
         }
     }

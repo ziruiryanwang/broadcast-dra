@@ -19,7 +19,6 @@ merlin = "3"
 [dev-dependencies]
 criterion = "0.5"
 proptest = "1.4"
-
 [[bench]]
 name = "commitment_bench"
 harness = false

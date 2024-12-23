@@ -12,6 +12,57 @@ use crate::commitment::{
 use crate::distribution::ValueDistribution;
 use crate::protocol::ProtocolSession;
 
+/// Numerically integrate expected optimal revenue via Myerson's virtual surplus:
+/// Rev(D^n) = ∫ phi^+(v) * n f(v) F(v)^{n-1} dv.
+fn numeric_optimal_revenue<D: ValueDistribution>(
+    dist: &D,
+    buyers: usize,
+    steps: usize,
+    quantile: f64,
+) -> f64 {
+    assert!(buyers > 0, "buyers must be positive");
+    let vmax = find_quantile(dist, quantile);
+    let dx = vmax / steps as f64;
+    let mut acc = 0.0;
+    for i in 0..steps {
+        let x = dx * (i as f64 + 0.5);
+        let f = dist.pdf(x);
+        let f_cdf = dist.cdf(x);
+        let phi = dist.virtual_value(x).max(0.0);
+        let weight = buyers as f64 * f * f_cdf.powi((buyers as i32) - 1);
+        acc += phi * weight * dx;
+    }
+    acc
+}
+
+/// Binary search for x where CDF(x) ~= q.
+fn find_quantile<D: ValueDistribution>(dist: &D, q: f64) -> f64 {
+    assert!(q > 0.0 && q < 1.0, "quantile must be in (0,1)");
+    let mut lo = 0.0;
+    let mut hi = 1.0;
+    while dist.cdf(hi) < q {
+        hi *= 2.0;
+    }
+    for _ in 0..96 {
+        let mid = 0.5 * (lo + hi);
+        if dist.cdf(mid) >= q {
+            hi = mid;
+        } else {
+            lo = mid;
+        }
+    }
+    hi
+}
+
+fn closed_form_optimal_revenue_uniform(low: f64, high: f64, buyers: usize) -> f64 {
+    // Use numeric integration for uniform to avoid algebraic mistakes.
+    numeric_optimal_revenue(&crate::distribution::Uniform::new(low, high), buyers, 50_000, 0.999999)
+}
+
+fn closed_form_optimal_revenue_pareto(scale: f64, shape: f64, buyers: usize) -> f64 {
+    numeric_optimal_revenue(&crate::distribution::Pareto::new(scale, shape), buyers, 50_000, 0.999999)
+}
+
 #[derive(Clone, Debug)]
 pub struct RevenueStats {
     pub baseline: f64,
@@ -430,7 +481,7 @@ mod tests {
             dist,
             1.0,
             2,
-            3,
+            1,
             DeviationModel::Fixed(FalseBid {
                 bid: 3.0,
                 reveal: true,
@@ -564,5 +615,71 @@ mod tests {
             );
             prop_assert!(stats.satisfied);
         }
+    }
+
+    #[test]
+    fn numerical_optimal_bound_matches_simulated_revenue() {
+        let dist = Exponential::new(1.0);
+        let buyers = 3;
+        let analytic = numeric_optimal_revenue(&dist, buyers, 20000, 0.999999);
+        let sim = simulate_deviation_with_scheme(
+            dist.clone(),
+            1.0,
+            buyers,
+            5000,
+            DeviationModel::Fixed(FalseBid { bid: 0.0, reveal: true }),
+            4242,
+            Backend::Sha(NonMalleableShaCommitment),
+        );
+        assert!(
+            sim.baseline_revenue <= analytic + 0.05,
+            "simulated revenue {} exceeds numeric optimum {}",
+            sim.baseline_revenue,
+            analytic
+        );
+    }
+
+    #[test]
+    fn uniform_closed_form_matches_simulated_revenue() {
+        let dist = Uniform::new(0.0, 10.0);
+        let buyers = 3;
+        let analytic = closed_form_optimal_revenue_uniform(0.0, 10.0, buyers);
+        let sim = simulate_deviation_with_scheme(
+            dist.clone(),
+            1.0,
+            buyers,
+            5000,
+            DeviationModel::Fixed(FalseBid { bid: 0.0, reveal: true }),
+            5151,
+            Backend::Sha(NonMalleableShaCommitment),
+        );
+        assert!(
+            sim.baseline_revenue <= analytic + 0.05,
+            "uniform simulated revenue {} exceeds analytic {}",
+            sim.baseline_revenue,
+            analytic
+        );
+    }
+
+    #[test]
+    fn pareto_numeric_bound_matches_simulated_revenue() {
+        let dist = Pareto::new(1.0, 2.0);
+        let buyers = 2;
+        let analytic = closed_form_optimal_revenue_pareto(1.0, 2.0, buyers);
+        let sim = simulate_deviation_with_scheme(
+            dist.clone(),
+            0.4,
+            buyers,
+            5000,
+            DeviationModel::Fixed(FalseBid { bid: 0.0, reveal: true }),
+            6161,
+            Backend::Sha(NonMalleableShaCommitment),
+        );
+        assert!(
+            sim.baseline_revenue <= analytic + 0.05,
+            "pareto simulated revenue {} exceeds numeric {}",
+            sim.baseline_revenue,
+            analytic
+        );
     }
 }

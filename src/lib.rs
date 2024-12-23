@@ -15,6 +15,11 @@ pub use centralized::{
     AdaptiveReserveDeviationReport, CentralizedDeviationResult, CentralizedProtocolDriver,
     adaptive_reserve_deviation, scripted_adaptive_reserve_run,
 };
+
+pub mod audit;
+pub fn run_audit() {
+    audit::emit_provenance().expect("audit run");
+}
 pub use collateral::collateral_requirement;
 pub use commitment::{
     AuditLedger, AuditReceipt, AuditedNonMalleableCommitment, BulletproofProofData,

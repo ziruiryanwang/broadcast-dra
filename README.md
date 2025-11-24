@@ -1,6 +1,6 @@
 # Credible, Optimal Auctions via Public Broadcast
 
-This repository implements the deferred revelation auction with public broadcast from the paper *Credible, Optimal Auctions via Public Broadcast*. It models the commit, reveal, and resolution phases, including collateral and validation rules derived from the paper.
+This repository implements the deferred revelation auction with public broadcast from the paper (*Credible, Optimal Auctions via Public Broadcast*)[https://arxiv.org/abs/2301.12532]. It models the commit, reveal, and resolution phases, including collateral and validation rules derived from the paper.
 
 
 ## High-level design
